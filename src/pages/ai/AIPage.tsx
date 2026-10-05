@@ -1,65 +1,99 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Bot, Shield, Send, Sparkles, AlertCircle,
-  Clock, CheckCircle2, Lock, Cpu
+  Clock, CheckCircle2, Lock, Cpu, Loader2
 } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { DEMO_PROJECTS, DEMO_AI_LOGS } from '../../lib/demo-data';
+import { fetchProjects, queryAIGateway } from '../../lib/api';
 
 export function AIPage() {
-  const [selectedProjectId, setSelectedProjectId] = useState<string>(DEMO_PROJECTS[0].id);
-  const [selectedAgent, setSelectedAgent] = useState<'research' | 'developer' | 'reviewer'>('research');
+  const { user } = useAuth();
+  const [projects, setProjects] = useState<any[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [selectedAgent, setSelectedAgent] = useState<'developer' | 'research' | 'reviewer'>('developer');
   const [prompt, setPrompt] = useState('');
   const [chat, setChat] = useState<
-    { sender: 'user' | 'agent'; text: string; model: string; sensitivity: string; approved?: boolean }[]
+    { sender: 'user' | 'agent'; text: string; model?: string; executionType?: string; promptHash?: string }[]
   >([
     {
       sender: 'agent',
-      text: 'AI Policy Gateway initialized. I am your Researchmesh AI agent. Depending on the sensitivity of your selected project, queries are executed either on local air-gapped models (Llama-3) or authorized cloud providers. How can I help your research today?',
-      model: 'llama3-8b-instruct (Local Sandbox)',
-      sensitivity: 'high',
-      approved: true,
+      text: 'AI Policy Gateway initialized. I am your ResearchMesh AI assistant. Depending on the sensitivity level of your selected project, queries are executed either on local air-gapped models (Ollama Llama-3) or authorized cloud providers. How can I help your research today?',
+      model: 'llama3-8b-instruct [LOCAL AIR-GAPPED CONTAINER]',
     },
   ]);
   const [loading, setLoading] = useState(false);
+  const [projectsLoading, setProjectsLoading] = useState(true);
 
-  const activeProject = DEMO_PROJECTS.find((p) => p.id === selectedProjectId) || DEMO_PROJECTS[0];
+  useEffect(() => {
+    async function load() {
+      setProjectsLoading(true);
+      try {
+        const projs = await fetchProjects();
+        setProjects(projs || []);
+        if (projs && projs.length > 0) {
+          setSelectedProjectId(projs[0].id);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setProjectsLoading(false);
+      }
+    }
+    load();
+  }, []);
 
-  const handleSend = (textToSend?: string) => {
+  const activeProject = projects.find((p) => p.id === selectedProjectId) || projects[0];
+
+  const handleSend = async (textToSend?: string) => {
     const q = textToSend || prompt;
-    if (!q.trim() || loading) return;
+    if (!q.trim() || loading || !activeProject || !user) return;
 
     setChat((prev) => [
       ...prev,
-      { sender: 'user', text: q, model: 'User Prompt', sensitivity: activeProject.sensitivity_level },
+      { sender: 'user', text: q, model: 'User Prompt' },
     ]);
     setPrompt('');
     setLoading(true);
 
-    setTimeout(() => {
-      let reply = '';
-      if (activeProject.sensitivity_level === 'high' || activeProject.sensitivity_level === 'critical') {
-        reply = `[ENFORCING LOCAL POLICY: ZERO DATA EGRESS]\n\nModel: Llama-3-8B-Instruct (Edge Isolated Node)\n\nResponse to: "${q}"\n\n1. Analysis: The requested deliverable complies with the project's IP Charter.\n2. Recommendation: When running edge inference on Jetson Nano, convert the PyTorch checkpoint to ONNX with FP16 precision. This achieves an estimated 82 FPS with 42MB memory footprint.\n3. Human Review Flag: Please have the designated mentor sign off on this architectural update before committing to the ledger.`;
-      } else {
-        reply = `[CLOUD REASONING MODEL PERMITTED - OPEN RESEARCH DOMAIN]\n\nAnalysis for "${q}":\n\nAll literature survey and code templates generated for this module are licensed under open MIT conditions as defined in Charter v1.0. Multi-agent cross-validation complete with 0 policy flags.`;
-      }
+    try {
+      const res = await queryAIGateway({
+        project_id: activeProject.id,
+        user_id: user.id,
+        agent_type: selectedAgent,
+        prompt: q,
+        project_sensitivity: activeProject.sensitivity_level || 'high',
+        target_hardware: 'Raspberry Pi 4 / NVIDIA Jetson Nano',
+      });
 
-      setChat((prev) => [
-        ...prev,
-        {
-          sender: 'agent',
-          text: reply,
-          model: activeProject.ai_policy.local_required
-            ? 'llama3-8b-instruct (Local Edge Node)'
-            : 'Claude 3.5 Sonnet (Cloud Router)',
-          sensitivity: activeProject.sensitivity_level,
-          approved: false,
-        },
-      ]);
+      if (res) {
+        setChat((prev) => [
+          ...prev,
+          {
+            sender: 'agent',
+            text: res.response,
+            model: res.model_used,
+            executionType: res.execution_type,
+            promptHash: res.prompt_hash,
+          },
+        ]);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
       setLoading(false);
-    }, 800);
+    }
   };
+
+  if (projectsLoading) {
+    return (
+      <div className="py-24 text-center">
+        <Loader2 size={36} className="mx-auto text-[#1D4ED8] animate-spin mb-3" />
+        <h3 className="text-sm font-semibold text-[#0F172A]">Loading AI policy gateway...</h3>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -74,178 +108,136 @@ export function AIPage() {
         </div>
 
         {/* Project Context Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-[#64748B]">Project Context:</span>
-          <select
-            value={selectedProjectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="px-3 py-1.5 text-xs bg-white border border-[#CBD5E1] rounded-md text-[#0F172A] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
-          >
-            {DEMO_PROJECTS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.title} ({p.sensitivity_level.toUpperCase()})
-              </option>
-            ))}
-          </select>
-        </div>
+        {projects.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[#64748B]">Project Context:</span>
+            <select
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="px-3 py-1.5 text-xs bg-white border border-[#CBD5E1] rounded-md text-[#0F172A] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title} ({p.sensitivity_level?.toUpperCase()})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Gateway Status Banner */}
-      <Card className="p-4 bg-white border-[#CBD5E1]">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#EFF6FF] flex items-center justify-center text-[#1D4ED8]">
-              <Shield size={18} />
+      {activeProject && (
+        <Card className="p-4 bg-white border-[#CBD5E1]">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-[#EFF6FF] flex items-center justify-center text-[#1D4ED8]">
+                <Shield size={18} />
+              </div>
+              <div>
+                <span className="font-bold text-[#0F172A] block">Sensitivity Level</span>
+                <span className="text-[#64748B] capitalize">{activeProject.sensitivity_level || 'high'} Sensitivity</span>
+              </div>
             </div>
-            <div>
-              <span className="text-[10px] text-[#64748B] uppercase font-bold tracking-wider block">
-                Gateway Status
-              </span>
-              <strong className="text-[#0F172A]">
-                {activeProject.ai_policy.local_required ? 'Local Isolation Enforced' : 'Cloud Hybrid Mode'}
-              </strong>
+
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-[#F0FDF4] flex items-center justify-center text-[#15803D]">
+                <Cpu size={18} />
+              </div>
+              <div>
+                <span className="font-bold text-[#0F172A] block">Compute Routing</span>
+                <span className="text-[#64748B]">
+                  {activeProject.sensitivity_level === 'high' || activeProject.sensitivity_level === 'critical'
+                    ? 'Isolated Edge Container (Ollama)'
+                    : 'Cloud Model Permitted'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-[#FFFBEB] flex items-center justify-center text-[#B45309]">
+                <Lock size={18} />
+              </div>
+              <div>
+                <span className="font-bold text-[#0F172A] block">Audit Integrity</span>
+                <span className="text-[#64748B]">SHA-256 Provenance Chained</span>
+              </div>
             </div>
           </div>
+        </Card>
+      )}
 
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#F8FAFC] flex items-center justify-center text-[#475569]">
-              <Cpu size={18} />
-            </div>
-            <div>
-              <span className="text-[10px] text-[#64748B] uppercase font-bold tracking-wider block">
-                Active Execution Model
-              </span>
-              <strong className="text-[#0F172A]">
-                {activeProject.ai_policy.local_required ? 'Llama-3-8B Local (Ollama)' : 'Cloud AI Router'}
-              </strong>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#FEF3C7] flex items-center justify-center text-[#B45309]">
-              <Lock size={18} />
-            </div>
-            <div>
-              <span className="text-[10px] text-[#64748B] uppercase font-bold tracking-wider block">
-                Data Sensitivity Level
-              </span>
-              <strong className="text-[#B45309] uppercase">{activeProject.sensitivity_level}</strong>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Chat Area */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-4">
-          {/* Agent persona tabs */}
+      {/* Main Chat Interface */}
+      <Card className="p-5 bg-white space-y-4">
+        <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
           <div className="flex gap-2">
-            {(['research', 'developer', 'reviewer'] as const).map((agent) => (
+            {(['developer', 'research', 'reviewer'] as const).map((agent) => (
               <button
                 key={agent}
                 onClick={() => setSelectedAgent(agent)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize cursor-pointer transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-xs capitalize cursor-pointer ${
                   selectedAgent === agent
-                    ? 'bg-[#0F172A] text-white'
-                    : 'bg-white border border-[#CBD5E1] text-[#64748B] hover:text-[#0F172A]'
+                    ? 'bg-[#1D4ED8] text-white font-semibold'
+                    : 'bg-[#F1F5F9] text-[#64748B]'
                 }`}
               >
                 {agent} Agent
               </button>
             ))}
           </div>
-
-          <Card className="h-[460px] flex flex-col bg-white border-[#CBD5E1]">
-            <div className="flex-1 p-4 overflow-y-auto space-y-4">
-              {chat.map((msg, i) => (
-                <div
-                  key={i}
-                  className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-[85%] rounded-lg p-3.5 text-xs leading-relaxed ${
-                      msg.sender === 'user'
-                        ? 'bg-[#1D4ED8] text-white'
-                        : 'bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A]'
-                    }`}
-                  >
-                    <div className="text-[10px] font-mono text-[#64748B] mb-1 flex items-center gap-1.5">
-                      <Bot size={11} /> {msg.model}
-                    </div>
-                    <p className="whitespace-pre-wrap">{msg.text}</p>
-                  </div>
-                </div>
-              ))}
-              {loading && (
-                <div className="flex items-center gap-2 text-xs text-[#64748B] p-2">
-                  <div className="w-2 h-2 rounded-full bg-[#1D4ED8] animate-ping" />
-                  <span>Processing query through Policy Gateway...</span>
-                </div>
-              )}
-            </div>
-
-            <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC] space-y-2">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder={`Consult ${selectedAgent} agent regarding experimental setups, edge code, or literature...`}
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                  className="flex-1 px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
-                />
-                <Button size="sm" icon={<Send size={14} />} onClick={() => handleSend()}>
-                  Run Query
-                </Button>
-              </div>
-
-              <div className="flex flex-wrap gap-1.5 text-[10px]">
-                <span className="text-[#64748B] self-center">Presets:</span>
-                {[
-                  'What edge inference optimizations apply to Raspberry Pi 4?',
-                  'Verify clinical sensitivity thresholds for FDA Class II',
-                  'Summarize literature on contrast normalization for diabetic retinopathy',
-                ].map((preset, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => handleSend(preset)}
-                    className="bg-white border border-[#CBD5E1] text-[#475569] px-2 py-0.5 rounded hover:bg-[#F1F5F9] cursor-pointer"
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Card>
         </div>
 
-        {/* Right Column: AI Activity Log */}
-        <div className="space-y-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-[#64748B]">
-            System AI Provenance Logs
-          </h3>
-          <Card className="p-4 bg-white space-y-3">
-            <p className="text-[11px] text-[#64748B]">
-              Every prompt and inference token is cryptographically attributable to a human requester.
-            </p>
-            <div className="space-y-2.5 max-h-[480px] overflow-y-auto">
-              {DEMO_AI_LOGS.map((log) => (
-                <div key={log.id} className="p-2.5 rounded border border-[#E2E8F0] text-xs space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#0F172A] capitalize">{log.agent_type}</span>
-                    <span className="text-[10px] font-mono text-[#64748B]">{log.model}</span>
+        {/* Chat Log */}
+        <div className="space-y-3 h-96 overflow-y-auto p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
+          {chat.map((m, i) => (
+            <div
+              key={i}
+              className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
+            >
+              <div
+                className={`max-w-[85%] p-3.5 rounded-lg text-xs leading-relaxed ${
+                  m.sender === 'user'
+                    ? 'bg-[#1D4ED8] text-white'
+                    : 'bg-white border border-[#CBD5E1] text-[#0F172A] shadow-xs'
+                }`}
+              >
+                {m.sender === 'agent' && (
+                  <div className="text-[10px] font-bold text-[#1D4ED8] mb-1 flex items-center gap-1">
+                    <Bot size={12} /> {m.model || 'Policy Gateway'}
                   </div>
-                  <p className="text-[#475569] line-clamp-1 italic">"{log.request}"</p>
-                  <div className="flex items-center justify-between text-[10px] text-[#64748B] pt-1 border-t border-[#F8FAFC]">
-                    <span>Sensitivity: <strong className="uppercase">{log.data_sensitivity}</strong></span>
-                    <span className="text-[#15803D] font-semibold">APPROVED ✓</span>
+                )}
+                <pre className="whitespace-pre-wrap font-sans">{m.text}</pre>
+                {m.promptHash && (
+                  <div className="mt-2 pt-1 border-t border-[#E2E8F0] text-[9px] font-mono text-[#64748B]">
+                    Prompt SHA-256: {m.promptHash.slice(0, 16)}...
                   </div>
-                </div>
-              ))}
+                )}
+              </div>
             </div>
-          </Card>
+          ))}
+          {loading && (
+            <div className="flex items-center gap-2 text-xs text-[#64748B] p-2">
+              <Loader2 size={14} className="animate-spin text-[#1D4ED8]" />
+              <span>Routing prompt through AI Policy Gateway...</span>
+            </div>
+          )}
         </div>
-      </div>
+
+        {/* Prompt Input */}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Type your research prompt (e.g., Explain CLAHE green-channel normalization on fundus scans)..."
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            className="flex-1 px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md text-[#0F172A] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
+          />
+          <Button size="sm" onClick={() => handleSend()} disabled={loading}>
+            <Send size={14} />
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 }

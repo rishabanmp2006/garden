@@ -1,0 +1,2 @@
+-- See supabase/migrations/001_initial_schema.sql for the complete SQL schema.
+-- Copy and run in Supabase SQL Editor.

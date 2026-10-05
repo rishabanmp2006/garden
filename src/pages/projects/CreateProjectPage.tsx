@@ -1,26 +1,29 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Building2, Shield, Plus, X, Lock, CheckCircle2
+  ArrowLeft, Building2, Shield, Plus, X, Lock, CheckCircle2, Upload, FileText, AlertCircle
 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Textarea, Select } from '../../components/ui/Input';
 import { SensitivityBadge, EngagementBadge } from '../../components/ui/Badge';
-import { DEMO_PROJECTS, DEMO_ORGANIZATIONS } from '../../lib/demo-data';
-import type { Project, SensitivityLevel, EngagementModel } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
+import { createProjectApi } from '../../lib/api';
+import type { SensitivityLevel, EngagementModel } from '../../types';
 
 export function CreateProjectPage() {
   const navigate = useNavigate();
+  const { user, profile } = useAuth();
 
   const [title, setTitle] = useState('');
   const [publicSummary, setPublicSummary] = useState('');
   const [confidentialBrief, setConfidentialBrief] = useState('');
   const [domain, setDomain] = useState('Healthcare AI');
-  const [skills, setSkills] = useState<string[]>(['Python', 'PyTorch']);
+  const [skills, setSkills] = useState<string[]>(['Python', 'PyTorch', 'Computer Vision']);
   const [newSkill, setNewSkill] = useState('');
   const [engagementModel, setEngagementModel] = useState<EngagementModel>('funded');
-  const [budget, setBudget] = useState(50000);
+  const [budget, setBudget] = useState(100000);
+  const [withdrawalThreshold, setWithdrawalThreshold] = useState(50);
   const [durationDays, setDurationDays] = useState(120);
   const [sensitivityLevel, setSensitivityLevel] = useState<SensitivityLevel>('high');
 
@@ -32,11 +35,20 @@ export function CreateProjectPage() {
 
   // IP & Terms
   const [ipOwnership, setIpOwnership] = useState(
-    'Shared — Organization retains core IP; contributors retain novel algorithms with license-back.'
+    'Shared IP — Organization retains proprietary assets; contributors retain novel algorithms with license-back.'
   );
   const [authorshipRules, setAuthorshipRules] = useState(
-    'Co-authorship for contributors exceeding 15% verified ledger credits.'
+    'Co-authorship for contributors exceeding >15% verified ledger credits.'
   );
+
+  // Files
+  const [publicFiles, setPublicFiles] = useState<string[]>(['sample_fundus_metadata.csv', 'problem_specification.pdf']);
+  const [newPublicFile, setNewPublicFile] = useState('');
+  const [confidentialFiles, setConfidentialFiles] = useState<string[]>(['proprietary_preprocessing_dataset.tar.gz', 'fda_validation_raw_labels.json']);
+  const [newConfidentialFile, setNewConfidentialFile] = useState('');
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleAddSkill = (e: React.KeyboardEvent | React.MouseEvent) => {
     if ('key' in e && e.key !== 'Enter') return;
@@ -51,37 +63,69 @@ export function CreateProjectPage() {
     setSkills(skills.filter((item) => item !== s));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleAddPublicFile = (e: React.MouseEvent | React.KeyboardEvent) => {
+    if ('key' in e && e.key !== 'Enter') return;
     e.preventDefault();
-    const newProject: Project = {
-      id: `proj-${Date.now()}`,
-      org_id: 'org-1',
-      organization: DEMO_ORGANIZATIONS[0],
-      title: title || 'Untitled Research Project',
-      public_summary: publicSummary,
-      confidential_brief: confidentialBrief,
-      domain,
-      required_skills: skills,
-      engagement_model: engagementModel,
-      budget: Number(budget) || 0,
-      sensitivity_level: sensitivityLevel,
-      ai_policy: {
-        cloud_allowed: cloudAllowed,
-        local_required: localRequired,
-        approved_models: approvedModels.split(',').map((m) => m.trim()).filter(Boolean),
-        human_approval_required: humanApprovalRequired,
-      },
-      ip_ownership: ipOwnership,
-      authorship_rules: authorshipRules,
-      duration_days: Number(durationDays) || 90,
-      status: 'open',
-      created_at: new Date().toISOString(),
-      member_count: 1,
-    };
-
-    DEMO_PROJECTS.unshift(newProject);
-    navigate(`/projects/${newProject.id}`);
+    if (newPublicFile.trim() && !publicFiles.includes(newPublicFile.trim())) {
+      setPublicFiles([...publicFiles, newPublicFile.trim()]);
+      setNewPublicFile('');
+    }
   };
+
+  const handleAddConfidentialFile = (e: React.MouseEvent | React.KeyboardEvent) => {
+    if ('key' in e && e.key !== 'Enter') return;
+    e.preventDefault();
+    if (newConfidentialFile.trim() && !confidentialFiles.includes(newConfidentialFile.trim())) {
+      setConfidentialFiles([...confidentialFiles, newConfidentialFile.trim()]);
+      setNewConfidentialFile('');
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      setErrorMsg('You must be logged in to create a research project.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMsg(null);
+
+    try {
+      const res = await createProjectApi({
+        org_id: user.id,
+        org_name: profile?.org_name || profile?.display_name || 'Research Organization',
+        title: title || 'Low-cost Diabetic Retinopathy Detection on Edge Devices',
+        public_summary: publicSummary,
+        confidential_brief: confidentialBrief,
+        domain,
+        required_skills: skills,
+        sensitivity_level: sensitivityLevel,
+        engagement_model: engagementModel,
+        budget: Number(budget) || 100000,
+        withdrawal_threshold: Number(withdrawalThreshold) || 50,
+        duration_days: Number(durationDays) || 120,
+        ai_policy: {
+          cloud_allowed: cloudAllowed,
+          local_required: localRequired,
+          approved_models: approvedModels.split(',').map((m) => m.trim()).filter(Boolean),
+          human_approval_required: humanApprovalRequired,
+        },
+        ip_ownership: ipOwnership,
+        authorship_rules: authorshipRules,
+        public_files: publicFiles,
+        confidential_files: confidentialFiles,
+      });
+
+      navigate(`/projects/${res.project_id}`);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'Failed to create research project.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
 
   return (
     <div className="space-y-6">
@@ -330,6 +374,17 @@ export function CreateProjectPage() {
               />
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input
+                label="Withdrawal / Reward Threshold (Credits)"
+                type="number"
+                value={withdrawalThreshold}
+                onChange={(e) => setWithdrawalThreshold(Number(e.target.value))}
+                helperText="Minimum verified credits a contributor must accumulate before payout unlock."
+                required
+              />
+            </div>
+
             <Textarea
               label="IP Ownership Charter Terms"
               rows={2}
@@ -345,15 +400,97 @@ export function CreateProjectPage() {
             />
           </Card>
 
+          {/* 5. Data Room Initial Attachments */}
+          <Card className="p-6 bg-white space-y-4">
+            <h3 className="text-sm font-bold text-[#0F172A] border-b border-[#E2E8F0] pb-2 flex items-center gap-2">
+              <Upload size={16} className="text-[#1D4ED8]" />
+              5. Data Room Setup (Public vs. Confidential)
+            </h3>
+
+            {/* Public Files */}
+            <div>
+              <label className="block text-xs font-semibold text-[#334155] mb-1">
+                Public Dataset & Problem Specification Files
+              </label>
+              <p className="text-[11px] text-[#64748B] mb-2">Visible to all exploring candidates before applying.</p>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  placeholder="e.g. sample_retina_data.csv, problem_statement.pdf"
+                  value={newPublicFile}
+                  onChange={(e) => setNewPublicFile(e.target.value)}
+                  onKeyDown={handleAddPublicFile}
+                  className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#CBD5E1] rounded-md"
+                />
+                <Button type="button" size="sm" variant="secondary" onClick={handleAddPublicFile}>
+                  Add Public File
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {publicFiles.map((f) => (
+                  <span key={f} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#0F172A]">
+                    <FileText size={12} className="text-[#1D4ED8]" />
+                    {f}
+                    <button type="button" onClick={() => setPublicFiles(publicFiles.filter((x) => x !== f))} className="text-[#94A3B8] hover:text-[#EF4444]">
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Confidential Files */}
+            <div className="pt-3 border-t border-[#F1F5F9]">
+              <label className="block text-xs font-semibold text-[#B45309] mb-1 flex items-center gap-1">
+                <Lock size={12} /> Confidential Files (Locked behind Charter Acceptance)
+              </label>
+              <p className="text-[11px] text-[#64748B] mb-2">
+                Restricted to accepted team members who have signed Charter v1.0. Download watermarking enforced.
+              </p>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  placeholder="e.g. proprietary_preprocessing_dataset.tar.gz, private_model_weights.onnx"
+                  value={newConfidentialFile}
+                  onChange={(e) => setNewConfidentialFile(e.target.value)}
+                  onKeyDown={handleAddConfidentialFile}
+                  className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#CBD5E1] rounded-md"
+                />
+                <Button type="button" size="sm" variant="secondary" onClick={handleAddConfidentialFile}>
+                  Add Confidential File
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {confidentialFiles.map((f) => (
+                  <span key={f} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#FEF3C7] border border-[#FDE68A] text-xs text-[#92400E]">
+                    <Lock size={12} className="text-[#D97706]" />
+                    {f}
+                    <button type="button" onClick={() => setConfidentialFiles(confidentialFiles.filter((x) => x !== f))} className="text-[#92400E] hover:text-[#EF4444]">
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </Card>
+
+          {errorMsg && (
+            <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] rounded-lg text-xs text-[#991B1B] flex items-center gap-2">
+              <AlertCircle size={16} />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           <div className="flex justify-end gap-3">
             <Button type="button" variant="secondary" onClick={() => navigate('/projects')}>
               Cancel
             </Button>
-            <Button type="submit" size="lg" icon={<Plus size={16} />}>
-              Publish Research Project
+            <Button type="submit" size="lg" disabled={isSubmitting} icon={<Plus size={16} />}>
+              {isSubmitting ? 'Publishing to Ledger...' : 'Publish Research Project'}
             </Button>
           </div>
         </form>
+
 
         {/* Live Preview Card */}
         <div className="space-y-4">

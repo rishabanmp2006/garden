@@ -1,32 +1,66 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   User, ShieldCheck, Award, GitCommitHorizontal,
   ExternalLink, Download, CheckCircle2, BookOpen,
-  Calendar, Building2, Code, Share2
+  Calendar, Building2, Code, Share2, Loader2, AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
-import {
-  DEMO_USERS, DEMO_PROFILES, DEMO_CONTRIBUTIONS,
-  DEMO_CREDITS, DEMO_PROJECTS
-} from '../../lib/demo-data';
+import { fetchUserPortfolio } from '../../lib/api';
 
 export function PortfolioPage() {
   const { userId } = useParams<{ userId: string }>();
   const { user: authUser } = useAuth();
 
+  const [portfolioData, setPortfolioData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
 
-  // If userId provided in route, show that user, else show logged-in user or student-1
-  const targetUserId = userId || authUser?.id || 'user-student-1';
-  const profileUser = DEMO_USERS.find((u) => u.id === targetUserId) || DEMO_USERS[1];
-  const profile = DEMO_PROFILES.find((p) => p.user_id === profileUser.id) || DEMO_PROFILES[0];
-  const userContributions = DEMO_CONTRIBUTIONS.filter((c) => c.contributor_id === profileUser.id);
-  const userCredits = DEMO_CREDITS.filter((c) => c.user_id === profileUser.id);
-  const totalCredits = userCredits.reduce((sum, c) => sum + c.amount, 0);
+  const targetUserId = userId || authUser?.id;
+
+  useEffect(() => {
+    async function loadPortfolio() {
+      if (!targetUserId) return;
+      setLoading(true);
+      try {
+        const data = await fetchUserPortfolio(targetUserId);
+        setPortfolioData(data);
+      } catch (err) {
+        console.error('Failed to load portfolio:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPortfolio();
+  }, [targetUserId]);
+
+  if (loading) {
+    return (
+      <div className="py-24 text-center">
+        <Loader2 size={36} className="mx-auto text-[#1D4ED8] animate-spin mb-3" />
+        <h3 className="text-sm font-semibold text-[#0F172A]">Loading verified researcher portfolio...</h3>
+        <p className="text-xs text-[#64748B]">Querying verified contributions and ledger-backed credentials.</p>
+      </div>
+    );
+  }
+
+  if (!portfolioData) {
+    return (
+      <div className="py-16 text-center bg-white rounded-lg border border-[#E2E8F0] p-8 max-w-lg mx-auto">
+        <AlertCircle size={36} className="mx-auto text-[#DC2626] mb-3" />
+        <h3 className="text-base font-bold text-[#0F172A]">Profile Not Found</h3>
+        <p className="text-xs text-[#64748B] mt-1">Please sign in to view your verified researcher portfolio.</p>
+      </div>
+    );
+  }
+
+  const profile = portfolioData.profile || {};
+  const totalCredits = portfolioData.total_credits || 0;
+  const verifiedContributions = portfolioData.verified_contributions || [];
+  const projectsParticipated = portfolioData.projects_participated || [];
 
   const credentialJson = {
     '@context': 'https://www.w3.org/2018/credentials/v1',
@@ -34,19 +68,18 @@ export function PortfolioPage() {
     issuer: 'did:researchmesh:platform-authority-gardenia2k26',
     issuanceDate: new Date().toISOString(),
     credentialSubject: {
-      id: `did:researchmesh:user:${profileUser.id}`,
-      name: profileUser.display_name,
-      verifiedAffiliation: profile.education || 'IIT Madras',
+      id: `did:researchmesh:user:${profile.id}`,
+      name: profile.display_name,
+      verifiedAffiliation: profile.education || 'Academic Contributor',
       totalVerifiedCredits: totalCredits,
-      reputationRank: 'Top 5% Contributor',
-      ledgerRootHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      verifiedContributionsCount: verifiedContributions.length,
+      provenanceHashChain: 'Cryptographically anchored on SHA-256 Ledger',
     },
     proof: {
       type: 'Ed25519Signature2020',
       created: new Date().toISOString(),
       proofPurpose: 'assertionMethod',
       verificationMethod: 'did:researchmesh:keys:primary-root',
-      jws: 'eyJhbGciOiJFZERTQSI...8f2a1c',
     },
   };
 
@@ -57,12 +90,12 @@ export function PortfolioPage() {
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-6">
           <div className="flex items-start gap-4">
             <div className="w-16 h-16 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xl font-bold">
-              {profileUser.display_name.charAt(0)}
+              {(profile.display_name || 'U').charAt(0).toUpperCase()}
             </div>
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold text-[#0F172A]">{profileUser.display_name}</h1>
-                {profileUser.verified && (
+                <h1 className="text-xl font-bold text-[#0F172A]">{profile.display_name}</h1>
+                {profile.verified && (
                   <span className="inline-flex items-center text-[10px] text-[#15803D] font-semibold bg-[#F0FDF4] px-2 py-0.5 rounded border border-[#DCFCE7]">
                     <CheckCircle2 size={11} className="mr-0.5" /> VERIFIED RESEARCHER
                   </span>
@@ -72,7 +105,7 @@ export function PortfolioPage() {
                 <Building2 size={13} /> {profile.education || 'Affiliated Institution'}
               </p>
               <p className="text-xs text-[#475569] max-w-xl pt-1 leading-relaxed">
-                {profile.bio || 'Undergraduate researcher focused on deep learning for healthcare.'}
+                {profile.bio || 'Verified researcher contributing to governed research workspaces.'}
               </p>
             </div>
           </div>
@@ -89,7 +122,10 @@ export function PortfolioPage() {
               size="sm"
               variant="secondary"
               icon={<Share2 size={14} />}
-              onClick={() => alert('Portfolio public share link copied to clipboard!')}
+              onClick={() => {
+                navigator.clipboard?.writeText(window.location.href);
+                alert('Portfolio link copied to clipboard!');
+              }}
             >
               Share Portfolio
             </Button>
@@ -98,146 +134,146 @@ export function PortfolioPage() {
 
         {/* Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-[#F1F5F9] text-xs">
-          <div className="p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
-            <span className="text-[10px] text-[#64748B] uppercase font-semibold block">
-              Verified Credits
-            </span>
-            <strong className="text-lg text-[#0F172A]">{totalCredits}</strong>
+          <div>
+            <span className="text-[10px] text-[#64748B] uppercase font-bold block">Verified Credits</span>
+            <strong className="text-lg font-bold text-[#0F172A]">{totalCredits}</strong>
           </div>
-          <div className="p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
-            <span className="text-[10px] text-[#64748B] uppercase font-semibold block">
-              Contributions
-            </span>
-            <strong className="text-lg text-[#0F172A]">{userContributions.length}</strong>
+          <div>
+            <span className="text-[10px] text-[#64748B] uppercase font-bold block">Approved Deliverables</span>
+            <strong className="text-lg font-bold text-[#0F172A]">{verifiedContributions.length}</strong>
           </div>
-          <div className="p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
-            <span className="text-[10px] text-[#64748B] uppercase font-semibold block">
-              Active Projects
-            </span>
-            <strong className="text-lg text-[#0F172A]">2</strong>
+          <div>
+            <span className="text-[10px] text-[#64748B] uppercase font-bold block">Research Projects</span>
+            <strong className="text-lg font-bold text-[#0F172A]">{projectsParticipated.length}</strong>
           </div>
-          <div className="p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
-            <span className="text-[10px] text-[#64748B] uppercase font-semibold block">
-              Authorship Eligible
-            </span>
-            <strong className="text-lg text-[#15803D]">Yes (25% Weight)</strong>
+          <div>
+            <span className="text-[10px] text-[#64748B] uppercase font-bold block">Ledger Status</span>
+            <strong className="text-sm font-semibold text-[#15803D] flex items-center gap-1 mt-1">
+              <CheckCircle2 size={13} /> Validated Chain
+            </strong>
           </div>
         </div>
       </Card>
 
-      {/* Skills & Verified Expertise */}
-      <Card className="p-6 bg-white space-y-4">
-        <h3 className="text-sm font-bold text-[#0F172A] flex items-center justify-between">
-          <span>Peer-Endorsed Technical Skills</span>
-          <span className="text-xs font-normal text-[#64748B]">Audited via project commits</span>
-        </h3>
-        <div className="flex flex-wrap gap-2">
-          {profile.skills.map((skill) => (
-            <span
-              key={skill}
-              className="px-3 py-1 bg-[#F1F5F9] text-[#1E293B] text-xs font-medium rounded-md border border-[#E2E8F0] flex items-center gap-1.5"
-            >
-              <CheckCircle2 size={12} className="text-[#15803D]" />
-              {skill}
-            </span>
-          ))}
-        </div>
-      </Card>
-
-      {/* Verified Provenance Contributions */}
-      <Card className="p-6 bg-white space-y-4">
-        <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
-          <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
-            <GitCommitHorizontal size={16} className="text-[#1D4ED8]" /> Cryptographically Logged Outputs
-          </h3>
-          <span className="text-xs text-[#64748B]">SHA-256 Backed</span>
-        </div>
-
-        <div className="space-y-3">
-          {userContributions.map((contrib) => (
-            <div key={contrib.id} className="p-4 rounded-lg border border-[#E2E8F0] text-xs space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#0F172A] capitalize">{contrib.type}</span>
-                  <span className="text-xs text-[#1D4ED8] bg-[#EFF6FF] px-2 py-0.5 rounded font-mono">
-                    +{contrib.credits_awarded} Credits
-                  </span>
-                  {contrib.ai_involvement !== 'none' && (
-                    <span className="text-[10px] font-semibold text-[#B45309] bg-[#FFFBEB] px-1.5 py-0.5 rounded">
-                      AI-Assisted
-                    </span>
-                  )}
-                </div>
-                <span className="text-[#64748B] text-[11px]">
-                  {new Date(contrib.created_at).toLocaleDateString()}
-                </span>
-              </div>
-              <p className="text-[#334155]">{contrib.description}</p>
-              <div className="text-[11px] text-[#64748B] flex items-center gap-1 font-mono">
-                <Code size={12} /> {contrib.artifact_url}
+      {/* Main Grid: Verified Contributions & Skills */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          {/* Verified Contributions */}
+          <Card className="p-5 bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A]">Ledger-Verified Contributions</h3>
+                <p className="text-xs text-[#64748B]">Approved code deliverables and milestone contributions.</p>
               </div>
             </div>
-          ))}
-        </div>
-      </Card>
 
-      {/* Publication Co-Authorship Eligibility */}
-      <Card className="p-6 bg-white space-y-3">
-        <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
-          <BookOpen size={16} className="text-[#1D4ED8]" /> Co-Authorship & Paper Pipeline
-        </h3>
-        <p className="text-xs text-[#475569] leading-relaxed">
-          Based on ResearchMesh Charter Clause 1, contributors who earn &gt;15% of verified credits on a
-          project are guaranteed co-authorship. Current status:
-        </p>
-        <div className="p-4 bg-[#F0FDF4] border border-[#DCFCE7] rounded-lg text-xs space-y-1">
-          <span className="font-bold text-[#166534]">
-            "Low-cost Diabetic Retinopathy Detection on Edge Devices" — Target: IEEE JBHI 2027
-          </span>
-          <p className="text-[#15803D]">
-            Contribution share: <strong>26.4% of total verified credits</strong> (Threshold: 15.0%).
-            Co-authorship locked and verified on the immutable ledger.
-          </p>
-        </div>
-      </Card>
+            {verifiedContributions.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#64748B]">
+                No approved contributions yet. Complete tasks and obtain mentor approval to build your verified portfolio.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F1F5F9]">
+                {verifiedContributions.map((c: any) => (
+                  <div key={c.id} className="py-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Code size={15} className="text-[#1D4ED8]" />
+                        <span className="text-xs font-bold text-[#0F172A]">{c.file_name}</span>
+                        <span className="text-[11px] text-[#64748B]">({c.project_title})</span>
+                      </div>
+                      <span className="text-xs font-bold text-[#15803D] bg-[#F0FDF4] px-2 py-0.5 rounded border border-[#DCFCE7]">
+                        +{c.credits_awarded} Credits
+                      </span>
+                    </div>
 
-      {/* Verifiable Credential Modal */}
+                    <p className="text-xs text-[#475569]">{c.description}</p>
+                    <div className="p-2 bg-[#F8FAFC] rounded border border-[#E2E8F0] text-[10px] font-mono text-[#64748B] truncate">
+                      SHA-256 Provenance Hash: {c.content_hash}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Research Projects Participated */}
+          <Card className="p-5 bg-white space-y-4">
+            <h3 className="text-sm font-bold text-[#0F172A] border-b border-[#E2E8F0] pb-2">
+              Collaborative Projects
+            </h3>
+            {projectsParticipated.length === 0 ? (
+              <div className="p-6 text-center text-xs text-[#64748B]">
+                No projects joined yet.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {projectsParticipated.map((p: any) => (
+                  <div key={p.id} className="p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] flex items-center justify-between text-xs">
+                    <div>
+                      <p className="font-bold text-[#0F172A]">{p.title}</p>
+                      <p className="text-[11px] text-[#64748B]">Domain: {p.domain} • Role: {p.role}</p>
+                    </div>
+                    <span className="text-[10px] font-semibold text-[#15803D] bg-[#F0FDF4] px-2 py-1 rounded">
+                      Active Contributor
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* Right Column: Skills */}
+        <div className="space-y-6">
+          <Card className="p-5 bg-white space-y-3">
+            <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">
+              Verified Technical Skills
+            </h4>
+            {Array.isArray(profile.skills) && profile.skills.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {profile.skills.map((s: string) => (
+                  <span
+                    key={s}
+                    className="px-2.5 py-1 bg-[#EFF6FF] text-[#1D4ED8] rounded-md text-xs font-medium"
+                  >
+                    {s}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[#64748B]">No skills listed.</p>
+            )}
+          </Card>
+
+          <Card className="p-5 bg-white space-y-3">
+            <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">
+              Privacy & IP Notice
+            </h4>
+            <p className="text-xs text-[#64748B] leading-relaxed">
+              In compliance with ResearchMesh Charter guidelines, confidential project files, private datasets, and proprietary trade secrets are strictly excluded from public portfolio views.
+            </p>
+          </Card>
+        </div>
+      </div>
+
+      {/* Credential Modal */}
       <Modal
         isOpen={isCredentialModalOpen}
         onClose={() => setIsCredentialModalOpen(false)}
-        title="Verifiable Academic Credential (W3C Standard)"
-        subtitle="Cryptographically signed researcher passport"
+        title="W3C Verifiable Researcher Credential"
+        subtitle="Cryptographically signed credential anchored on the SHA-256 ledger"
         maxWidth="lg"
       >
-        <div className="space-y-4 text-xs">
-          <p className="text-[#475569]">
-            This JSON-LD credential adheres to the W3C Verifiable Credentials Data Model v1.1. It can be
-            independently verified without contacting a central server.
-          </p>
-
-          <pre className="p-3 bg-[#0F172A] text-[#93C5FD] font-mono text-[11px] rounded-lg overflow-x-auto max-h-[300px]">
+        <div className="space-y-4">
+          <div className="p-3 bg-[#F0FDF4] border border-[#DCFCE7] rounded-lg text-xs text-[#166534]">
+            This JSON-LD credential proves verified authorship and credits without disclosing confidential data.
+          </div>
+          <pre className="p-3 bg-[#0F172A] text-[#F8FAFC] font-mono text-[11px] rounded-lg overflow-x-auto max-h-80">
             {JSON.stringify(credentialJson, null, 2)}
           </pre>
-
           <div className="flex justify-end gap-2 pt-2">
-            <Button size="sm" variant="secondary" onClick={() => setIsCredentialModalOpen(false)}>
+            <Button size="sm" onClick={() => setIsCredentialModalOpen(false)}>
               Close
-            </Button>
-            <Button
-              size="sm"
-              icon={<Download size={14} />}
-              onClick={() => {
-                const blob = new Blob([JSON.stringify(credentialJson, null, 2)], {
-                  type: 'application/json',
-                });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `researchmesh-credential-${profileUser.id}.json`;
-                a.click();
-              }}
-            >
-              Download Signed JSON-LD
             </Button>
           </div>
         </div>

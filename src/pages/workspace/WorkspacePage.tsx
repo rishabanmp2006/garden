@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Briefcase, Lock, Shield, Bot, GitCommitHorizontal,
   CheckCircle2, AlertTriangle, FileText, Download,
-  Send, Sparkles, Plus, Clock, Users, ArrowLeft, RefreshCw, Eye
+  Send, Sparkles, Plus, Clock, Users, ArrowLeft, RefreshCw, Eye, Check, X, Code, Loader2
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/ui/Card';
@@ -13,240 +13,344 @@ import { Modal } from '../../components/ui/Modal';
 import { Input, Textarea, Select } from '../../components/ui/Input';
 import { StatusBadge, SensitivityBadge } from '../../components/ui/Badge';
 import {
-  DEMO_PROJECTS, DEMO_MEMBERSHIPS, DEMO_MILESTONES,
-  DEMO_LEDGER, DEMO_AI_LOGS, DEMO_CONTRIBUTIONS, DEMO_USERS
-} from '../../lib/demo-data';
-import type { LedgerEntry, AILog, Contribution } from '../../types';
+  fetchProjectDetails,
+  fetchContributionsApi,
+  createTaskApi,
+  submitWorkApi,
+  reviewWorkApi,
+  fetchLedger,
+  verifyLedger,
+  tamperLedger,
+  restoreLedger,
+  queryAIGateway,
+  generateWatermark
+} from '../../lib/api';
+
+const DEFAULT_PREPROCESSING_CODE = `import cv2
+import numpy as np
+
+def preprocess_retinal_fundus(image_path: str, target_size=(512, 512)):
+    """
+    Green-channel Contrast Limited Adaptive Histogram Equalization (CLAHE)
+    Optimized for diabetic retinopathy lesion detection on edge devices.
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError("Invalid fundus image stream")
+
+    # Resize to standardized inference resolution
+    resized = cv2.resize(img, target_size)
+
+    # Extract green channel (highest contrast for microaneurysms)
+    green_ch = resized[:, :, 1]
+
+    # Apply CLAHE to amplify blood vessel and hard exudate visibility
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(green_ch)
+
+    # Normalize matrix to [-1.0, 1.0] for INT8 TensorRT inference
+    normalized = (enhanced.astype(np.float32) / 127.5) - 1.0
+    return normalized
+`;
 
 export function WorkspacePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
 
-  const project = DEMO_PROJECTS.find((p) => p.id === id) || DEMO_PROJECTS[0];
-  const members = DEMO_MEMBERSHIPS.filter((m) => m.project_id === project.id);
-  const milestones = DEMO_MILESTONES.filter((m) => m.project_id === project.id);
+  const [projectData, setProjectData] = useState<any>(null);
+  const [contributions, setContributions] = useState<any[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState('tasks');
 
   // AI Assistant State
-  const [selectedAgent, setSelectedAgent] = useState<'research' | 'developer' | 'reviewer'>('developer');
+  const [selectedAgent, setSelectedAgent] = useState<'developer' | 'research' | 'reviewer'>('developer');
   const [chatMessages, setChatMessages] = useState<
-    { sender: 'user' | 'agent'; text: string; model?: string; requiresApproval?: boolean; approved?: boolean }[]
+    { sender: 'user' | 'agent'; text: string; model?: string; executionType?: string; promptHash?: string; responseHash?: string }[]
   >([
     {
       sender: 'agent',
-      text: `Hello! I am your workspace ${selectedAgent.toUpperCase()} agent. I am operating under Policy Gateway: LOCAL LLAMA-3 ONLY. No sensitive retinal dataset annotations will leave your isolated edge node. How can I assist you with Milestone 2?`,
-      model: 'llama3-8b-instruct [LOCAL CONTAINER]',
+      text: `Hello! I am your ResearchMesh ${selectedAgent.toUpperCase()} agent. I enforce policy boundaries: Local container routing is enforced for confidential assets. How can I assist you with your milestone task?`,
+      model: 'llama3-8b-instruct [AIR-GAPPED LOCAL CONTAINER]',
     },
   ]);
   const [promptInput, setPromptInput] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [aiLogs, setAiLogs] = useState<AILog[]>(DEMO_AI_LOGS.filter((l) => l.project_id === project.id));
 
   // Ledger state & Tamper Simulation
-  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>(
-    DEMO_LEDGER.filter((l) => l.project_id === project.id)
-  );
   const [isTampered, setIsTampered] = useState(false);
   const [verificationResult, setVerificationResult] = useState<{
     valid: boolean;
-    brokenIndex?: number;
+    broken_block_id?: number;
     message: string;
+    total_blocks?: number;
   } | null>(null);
 
-  // Contributions State
-  const [contributions, setContributions] = useState<Contribution[]>(
-    DEMO_CONTRIBUTIONS.filter((c) => c.project_id === project.id)
+  // Task Creation Modal (Org / Mentor)
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskDescription, setTaskDescription] = useState('');
+  const [taskReward, setTaskReward] = useState(25);
+  const [taskMilestoneId, setTaskMilestoneId] = useState('');
+
+  // Submit Work Modal (Student)
+  const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState('');
+  const [fileName, setFileName] = useState('preprocessing.py');
+  const [fileContent, setFileContent] = useState(DEFAULT_PREPROCESSING_CODE);
+  const [submissionDesc, setSubmissionDesc] = useState(
+    'Implemented green-channel CLAHE normalization for retinal fundus scans with INT8 quantization for edge deployment.'
   );
-  const [isContributionModalOpen, setIsContributionModalOpen] = useState(false);
-  const [contribType, setContribType] = useState('code');
-  const [contribDesc, setContribDesc] = useState('');
-  const [contribArtifact, setContribArtifact] = useState('');
-  const [contribAiInvolvement, setContribAiInvolvement] = useState<'none' | 'ai_assisted' | 'ai_generated'>('ai_assisted');
+  const [aiInvolvement, setAiInvolvement] = useState<'none' | 'ai_assisted' | 'ai_generated'>('ai_assisted');
+  const [isSubmittingWork, setIsSubmittingWork] = useState(false);
 
-  // Protected Files & Watermark Modal
-  const [watermarkedFile, setWatermarkedFile] = useState<{ name: string; size: string; hash: string } | null>(null);
+  // Review Modal (Mentor)
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [activeReviewContrib, setActiveReviewContrib] = useState<any>(null);
+  const [reviewVerdict, setReviewVerdict] = useState<'approved' | 'rejected'>('approved');
+  const [reviewComment, setReviewComment] = useState('Code verified. Passes FDA Class II sensitivity requirements with zero edge data leakage.');
+  const [isReviewing, setIsReviewing] = useState(false);
 
-  // Interactive Task Board State
-  const [tasks, setTasks] = useState([
-    { id: 't-1', title: 'Implement NovaScan v3 normalization in PyTorch', assignee: 'Rishaban MP', status: 'completed', milestone: 'ms-1' },
-    { id: 't-2', title: 'Data augmentation for blur and low-light retinal scans', assignee: 'Rishaban MP', status: 'completed', milestone: 'ms-1' },
-    { id: 't-3', title: 'Design lightweight CNN/Transformer backbone for Jetson Nano', assignee: 'Rishaban MP', status: 'in_progress', milestone: 'ms-2' },
-    { id: 't-4', title: 'Setup validation loss benchmark against FDA sensitivity bar (>90%)', assignee: 'Dr. Meera Krishnan', status: 'todo', milestone: 'ms-2' },
-    { id: 't-5', title: 'Clinical edge inference latency test on Raspberry Pi 4', assignee: 'Priya Sharma', status: 'todo', milestone: 'ms-3' },
-  ]);
+  // Watermark Modal Receipt
+  const [watermarkedReceipt, setWatermarkedReceipt] = useState<any>(null);
 
+  const loadAll = async () => {
+    if (!id) return;
+    try {
+      const [projRes, contribRes, ledgerRes] = await Promise.all([
+        fetchProjectDetails(id, user?.id),
+        fetchContributionsApi(id).catch(() => []),
+        fetchLedger(id).catch(() => []),
+      ]);
+      setProjectData(projRes);
+      setContributions(contribRes);
+      setLedgerEntries(ledgerRes);
+      if (projRes?.milestones?.length > 0 && !taskMilestoneId) {
+        setTaskMilestoneId(projRes.milestones[0].id);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to load workspace.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAll();
+  }, [id, user?.id]);
+
+  const project = projectData?.project;
+  const milestones = projectData?.milestones || [];
+  const tasks = projectData?.tasks || [];
+  const members = projectData?.members || [];
+  const files = projectData?.files || [];
+  const charter = projectData?.charter;
+  const escrow = projectData?.escrow;
+
+  const isOrgOwner = user?.id === project?.org_id;
+  const isMentor = members.some((m: any) => m.user_id === user?.id && m.role === 'mentor') || user?.role === 'mentor';
+  const isStudent = user?.role === 'student' || (!isOrgOwner && !isMentor);
+
+  // Tab definitions
   const tabs = [
-    { id: 'tasks', label: 'Milestones & Tasks', icon: <CheckCircle2 size={14} /> },
-    { id: 'ai-gateway', label: 'AI Policy Gateway', icon: <Bot size={14} /> },
-    { id: 'files', label: 'Confidential Data Room', icon: <Lock size={14} /> },
+    { id: 'tasks', label: 'Milestones & Tasks', count: tasks.length, icon: <CheckCircle2 size={14} /> },
+    { id: 'reviews', label: 'Mentor Review Queue', count: contributions.filter((c: any) => c.status === 'under_review').length, icon: <Eye size={14} /> },
     { id: 'contributions', label: 'Contributions Log', count: contributions.length, icon: <GitCommitHorizontal size={14} /> },
+    { id: 'data-room', label: 'Confidential Data Room', count: files.length, icon: <Lock size={14} /> },
+    { id: 'ai-gateway', label: 'AI Policy Gateway', icon: <Bot size={14} /> },
     { id: 'ledger', label: 'SHA-256 Ledger', count: ledgerEntries.length, icon: <Shield size={14} /> },
     { id: 'charter', label: 'Charter & Team', icon: <FileText size={14} /> },
   ];
 
-  // Handle AI Agent Prompts
-  const handleSendPrompt = (presetText?: string) => {
+  // 1. Task Creation
+  const handleCreateTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!project) return;
+    try {
+      await createTaskApi(project.id, {
+        milestone_id: taskMilestoneId || milestones[0]?.id || 'ms-1',
+        title: taskTitle,
+        description: taskDescription,
+        credits_reward: Number(taskReward) || 25,
+      });
+      setIsTaskModalOpen(false);
+      setTaskTitle('');
+      setTaskDescription('');
+      await loadAll();
+    } catch (err: any) {
+      alert(err.message || 'Failed to create task');
+    }
+  };
+
+  // 2. Submit Work on Task (Student Upload)
+  const handleSubmitWork = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !selectedTaskId) return;
+    setIsSubmittingWork(true);
+    try {
+      await submitWorkApi(selectedTaskId, {
+        contributor_id: user.id,
+        file_name: fileName,
+        file_content: fileContent,
+        description: submissionDesc,
+        ai_involvement: aiInvolvement,
+      });
+      setIsSubmitModalOpen(false);
+      await loadAll();
+    } catch (err: any) {
+      alert(err.message || 'Failed to submit work deliverable');
+    } finally {
+      setIsSubmittingWork(false);
+    }
+  };
+
+  // 3. Mentor Review Action
+  const handleReviewWork = async () => {
+    if (!user || !activeReviewContrib) return;
+    setIsReviewing(true);
+    try {
+      await reviewWorkApi(activeReviewContrib.id, {
+        reviewer_id: user.id,
+        verdict: reviewVerdict,
+        comment: reviewComment,
+      });
+      setIsReviewModalOpen(false);
+      setActiveReviewContrib(null);
+      await loadAll();
+    } catch (err: any) {
+      alert(err.message || 'Review failed');
+    } finally {
+      setIsReviewing(false);
+    }
+  };
+
+  // 4. AI Gateway Query
+  const handleSendPrompt = async (presetText?: string) => {
     const textToSend = presetText || promptInput;
-    if (!textToSend.trim() || isAiLoading) return;
+    if (!textToSend.trim() || isAiLoading || !project || !user) return;
 
     const userMsg = { sender: 'user' as const, text: textToSend };
     setChatMessages((prev) => [...prev, userMsg]);
     setPromptInput('');
     setIsAiLoading(true);
 
-    setTimeout(() => {
-      let agentReply = '';
-      let requiresApproval = false;
-
-      if (textToSend.includes('retinal') || textToSend.includes('NovaScan') || textToSend.includes('normalization')) {
-        agentReply = `[LOCAL MODEL EXECUTION - ZERO DATA LEAKAGE]\n\nAnalysis of NovaScan v3 normalization pipeline:\n- Normalizes fundus images to 512x512 with green-channel CLAHE (Contrast Limited Adaptive Histogram Equalization).\n- Mean RGB shifted to [0.485, 0.456, 0.406] and std [0.229, 0.224, 0.225].\n- Note: High Sensitivity data flag active. External cloud transmission blocked. Recommendation: Quantize to INT8 for Jetson Nano TensorRT engine to gain 3.4x throughput.`;
-        requiresApproval = true;
-      } else if (textToSend.includes('Raspberry') || textToSend.includes('edge') || textToSend.includes('RAM')) {
-        agentReply = `[LOCAL MODEL EXECUTION - CODELLAMA-7B]\n\nEdge Hardware Constraints Check:\n- Raspberry Pi 4 (4GB RAM) has ~2.1GB headroom for model graph.\n- With ONNX Runtime + ARM NEON execution provider, a MobileNetV4 / TinyTransformer model consumes 38MB flash and 310MB peak RAM during FP16 inference.\n- Target latency estimated: 1.84s per scan (within <3s requirement).`;
-        requiresApproval = true;
-      } else {
-        agentReply = `[POLICY GATEWAY PROCESSED]\n\nBased on Project Charter v1 specifications, the proposed architecture meets the milestone acceptance criteria. All intermediate outputs are tracked under local hash-chain logging.`;
-        requiresApproval = false;
-      }
-
-      const agentMsg = {
-        sender: 'agent' as const,
-        text: agentReply,
-        model: 'llama3-8b-instruct [LOCAL AIR-GAPPED]',
-        requiresApproval,
-        approved: false,
-      };
-
-      setChatMessages((prev) => [...prev, agentMsg]);
-      setIsAiLoading(false);
-
-      // Add to AI audit log
-      const newLog: AILog = {
-        id: `log-${Date.now()}`,
-        agent_id: `agent-${selectedAgent}`,
+    try {
+      const res = await queryAIGateway({
         project_id: project.id,
-        human_owner_id: user?.id || 'user-student-1',
+        user_id: user.id,
         agent_type: selectedAgent,
-        request: textToSend,
-        response: agentReply.slice(0, 120) + '...',
-        model: 'llama3-8b-instruct',
-        provider: 'ollama_local',
-        data_sensitivity: project.sensitivity_level,
-        input_scope: 'milestone-2-edge-optimization',
-        approval_status: requiresApproval ? 'pending' : 'approved',
-        fallback_used: false,
-        created_at: new Date().toISOString(),
-      };
-      setAiLogs((prev) => [newLog, ...prev]);
-    }, 900);
-  };
+        prompt: textToSend,
+        project_sensitivity: project.sensitivity_level || 'high',
+        target_hardware: 'Raspberry Pi 4 / NVIDIA Jetson Nano',
+      });
 
-  // Ledger Verification & Tamper Simulation
-  const handleVerifyLedger = () => {
-    if (isTampered) {
-      setVerificationResult({
-        valid: false,
-        brokenIndex: 2,
-        message: 'CRITICAL ALERT: SHA-256 Hash Mismatch at Block #3! Content hash was modified without cascading cryptographic proof. Chain integrity compromised.',
-      });
-    } else {
-      setVerificationResult({
-        valid: true,
-        message: `Ledger Integrity Verified: All ${ledgerEntries.length} blocks sequentially validated against previous hashes. Genesis root hash intact.`,
-      });
+      if (res) {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            sender: 'agent',
+            text: res.response,
+            model: res.model_used,
+            executionType: res.execution_type,
+            promptHash: res.prompt_hash,
+            responseHash: res.response_hash,
+          },
+        ]);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAiLoading(false);
     }
   };
 
-  const handleSimulateTamper = () => {
-    setIsTampered(true);
-    setLedgerEntries((prev) =>
-      prev.map((entry, idx) =>
-        idx === 2
-          ? {
-              ...entry,
-              action: '[UNAUTHORIZED EDIT] Awarded 500 Credits to External Actor',
-              metadata: { ...entry.metadata, tampered: true },
-            }
-          : entry
-      )
+  // 5. Ledger Integrity Verification
+  const handleVerifyLedger = async () => {
+    try {
+      const res = await verifyLedger();
+      if (res) {
+        setVerificationResult(res);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSimulateTamper = async () => {
+    try {
+      const res = await tamperLedger(2, '[UNAUTHORIZED EDIT] Forged Credit Award: +9999 Credits');
+      setIsTampered(true);
+      await loadAll();
+      await handleVerifyLedger();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRestoreLedger = async () => {
+    try {
+      await restoreLedger();
+      setIsTampered(false);
+      setVerificationResult(null);
+      await loadAll();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 6. Watermarked Download
+  const handleDownloadFile = async (f: any) => {
+    if (!user || !project) return;
+    try {
+      const receipt = await generateWatermark({
+        file_name: f.name,
+        user_id: user.id,
+        user_email: user.email || 'researcher@researchmesh.org',
+        project_id: project.id,
+      });
+      setWatermarkedReceipt(receipt);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="py-24 text-center">
+        <Loader2 size={36} className="mx-auto text-[#1D4ED8] animate-spin mb-3" />
+        <h3 className="text-sm font-semibold text-[#0F172A]">Loading research workspace...</h3>
+        <p className="text-xs text-[#64748B]">Synchronizing inner tasks, review queue, and SHA-256 ledger.</p>
+      </div>
     );
-    setVerificationResult({
-      valid: false,
-      brokenIndex: 2,
-      message: 'SIMULATION ACTIVE: Block #3 was altered. Run "Verify Ledger Integrity" to trigger cryptographic detection.',
-    });
-  };
+  }
 
-  const handleRestoreLedger = () => {
-    setIsTampered(false);
-    setLedgerEntries(DEMO_LEDGER.filter((l) => l.project_id === project.id));
-    setVerificationResult(null);
-  };
-
-  // Record New Contribution
-  const handleRecordContribution = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newContrib: Contribution = {
-      id: `contrib-${Date.now()}`,
-      project_id: project.id,
-      contributor_id: user?.id || 'user-student-1',
-      role: 'student',
-      type: contribType as any,
-      description: contribDesc,
-      artifact_url: contribArtifact || 'https://github.com/novabiotech/edge-retina/commit/8f2a1',
-      ai_involvement: contribAiInvolvement,
-      status: 'approved',
-      credits_awarded: 25,
-      created_at: new Date().toISOString(),
-    };
-
-    setContributions([newContrib, ...contributions]);
-
-    // Append to ledger
-    const lastEntry = ledgerEntries[ledgerEntries.length - 1];
-    const newBlock: LedgerEntry = {
-      id: ledgerEntries.length + 1,
-      project_id: project.id,
-      actor_id: user?.id || 'user-student-1',
-      actor_type: 'human',
-      action: `Recorded contribution: ${contribType} (${contribAiInvolvement})`,
-      content_hash: '9f8e7d6c5b4a3210fe9876543210abcd',
-      previous_hash: lastEntry?.entry_hash || '0000000000000000',
-      entry_hash: '3a1b2c4d5e6f7a8b9c0d1e2f3a4b5c6d',
-      timestamp: new Date().toISOString(),
-      metadata: { contribution_id: newContrib.id, type: contribType },
-    };
-    setLedgerEntries([...ledgerEntries, newBlock]);
-
-    setIsContributionModalOpen(false);
-    setContribDesc('');
-    setContribArtifact('');
-  };
-
-  // Move task status
-  const handleAdvanceTask = (taskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id !== taskId) return t;
-        const nextStatus =
-          t.status === 'todo' ? 'in_progress' : t.status === 'in_progress' ? 'completed' : 'completed';
-        return { ...t, status: nextStatus };
-      })
+  if (error || !project) {
+    return (
+      <div className="py-16 text-center bg-white rounded-lg border border-[#E2E8F0] p-8 max-w-lg mx-auto">
+        <AlertTriangle size={36} className="mx-auto text-[#DC2626] mb-3" />
+        <h3 className="text-base font-bold text-[#0F172A]">Workspace Not Found</h3>
+        <p className="text-xs text-[#64748B] mt-1">{error || 'This project workspace does not exist.'}</p>
+        <Button className="mt-4" onClick={() => navigate('/projects')}>
+          Back to Projects
+        </Button>
+      </div>
     );
-  };
+  }
 
   return (
     <div className="space-y-6">
-      {/* Top Breadcrumb & Actions */}
+      {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <button
-            onClick={() => navigate('/projects')}
+            onClick={() => navigate(`/projects/${project.id}`)}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#64748B] hover:text-[#0F172A] transition-colors mb-1 cursor-pointer"
           >
-            <ArrowLeft size={14} /> Back to Projects
+            <ArrowLeft size={14} /> Back to Project Details
           </button>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold text-[#0F172A]">{project.title}</h1>
@@ -254,26 +358,27 @@ export function WorkspacePage() {
             <StatusBadge status={project.status} />
           </div>
           <p className="text-xs text-[#64748B] mt-0.5">
-            Governed Research Workspace • Charter v1.0 Signatory Active • Organization:{' '}
-            <strong className="text-[#0F172A]">{project.organization?.name}</strong>
+            Governed Research Workspace • Active Charter Signatory: <strong className="text-[#0F172A]">{user?.display_name || user?.email}</strong> ({user?.role?.toUpperCase()})
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          {(isOrgOwner || isMentor) && (
+            <Button
+              size="sm"
+              icon={<Plus size={14} />}
+              onClick={() => setIsTaskModalOpen(true)}
+            >
+              Create Task
+            </Button>
+          )}
           <Button
             size="sm"
             variant="secondary"
-            icon={<Plus size={14} />}
-            onClick={() => setIsContributionModalOpen(true)}
-          >
-            Log Contribution
-          </Button>
-          <Button
-            size="sm"
             icon={<Bot size={14} />}
             onClick={() => setActiveTab('ai-gateway')}
           >
-            AI Assistant
+            AI Policy Gateway
           </Button>
         </div>
       </div>
@@ -288,17 +393,19 @@ export function WorkspacePage() {
           <Card className="p-5 bg-white space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-[#0F172A]">Milestone Roadmap & Escrow Status</h3>
-              <span className="text-xs font-semibold text-[#15803D] bg-[#F0FDF4] px-2 py-0.5 rounded border border-[#DCFCE7]">
-                Milestone 1 Completed ($20,000 Escrow Released)
-              </span>
+              {escrow && (
+                <span className="text-xs font-semibold text-[#15803D] bg-[#F0FDF4] px-2.5 py-1 rounded border border-[#DCFCE7]">
+                  Escrow Available: ${Number(escrow.available_balance).toLocaleString()} • Released: ${Number(escrow.released_balance).toLocaleString()}
+                </span>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              {milestones.map((m, idx) => (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {milestones.map((m: any, idx: number) => (
                 <div
                   key={m.id}
                   className={`p-3.5 rounded-lg border text-xs space-y-2 ${
-                    m.status === 'accepted'
+                    m.status === 'completed'
                       ? 'border-[#86EFAC] bg-[#F0FDF4]'
                       : m.status === 'in_progress'
                       ? 'border-[#93C5FD] bg-[#EFF6FF]'
@@ -306,14 +413,14 @@ export function WorkspacePage() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#0F172A]">M{idx + 1}</span>
+                    <span className="font-bold text-[#0F172A]">Milestone {idx + 1}</span>
                     <StatusBadge status={m.status} />
                   </div>
                   <p className="font-semibold text-[#0F172A] line-clamp-1">{m.title}</p>
                   <p className="text-[11px] text-[#64748B] line-clamp-2">{m.acceptance_criteria}</p>
                   <div className="pt-1 border-t border-[#CBD5E1]/40 flex justify-between font-medium">
                     <span className="text-[#64748B]">Escrow Allocation</span>
-                    <strong className="text-[#0F172A]">${m.budget_allocation.toLocaleString()}</strong>
+                    <strong className="text-[#0F172A]">${Number(m.budget_allocation || 0).toLocaleString()}</strong>
                   </div>
                 </div>
               ))}
@@ -326,53 +433,71 @@ export function WorkspacePage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-[#64748B]">
-                  To Do ({tasks.filter((t) => t.status === 'todo').length})
+                  To Do ({tasks.filter((t: any) => t.status === 'todo').length})
                 </span>
               </div>
               <div className="space-y-2">
                 {tasks
-                  .filter((t) => t.status === 'todo')
-                  .map((task) => (
-                    <Card key={task.id} className="p-3.5 bg-white border-[#E2E8F0] hover:border-[#94A3B8] transition-colors">
+                  .filter((t: any) => t.status === 'todo')
+                  .map((task: any) => (
+                    <Card key={task.id} className="p-3.5 bg-white border-[#E2E8F0] space-y-2">
                       <p className="text-xs font-semibold text-[#0F172A]">{task.title}</p>
-                      <div className="flex items-center justify-between mt-3 text-[11px] text-[#64748B]">
-                        <span>Assigned: {task.assignee}</span>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          className="h-6 text-[11px] px-2 py-0"
-                          onClick={() => handleAdvanceTask(task.id)}
-                        >
-                          Start
-                        </Button>
+                      <p className="text-[11px] text-[#64748B]">{task.description}</p>
+                      <div className="flex items-center justify-between pt-2 border-t border-[#F1F5F9] text-[11px]">
+                        <span className="font-medium text-[#1D4ED8]">+{task.credits_reward || 25} Credits</span>
+                        {isStudent && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="h-6 text-[11px] px-2 py-0"
+                            onClick={() => {
+                              setSelectedTaskId(task.id);
+                              setIsSubmitModalOpen(true);
+                            }}
+                          >
+                            Claim & Work
+                          </Button>
+                        )}
                       </div>
                     </Card>
                   ))}
               </div>
             </div>
 
-            {/* Column: In Progress */}
+            {/* Column: In Progress / Under Review */}
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-[#1D4ED8]">
-                  In Progress ({tasks.filter((t) => t.status === 'in_progress').length})
+                  Under Review ({tasks.filter((t: any) => t.status === 'under_review' || t.status === 'in_progress').length})
                 </span>
               </div>
               <div className="space-y-2">
                 {tasks
-                  .filter((t) => t.status === 'in_progress')
-                  .map((task) => (
-                    <Card key={task.id} className="p-3.5 bg-white border-[#93C5FD] shadow-xs">
-                      <p className="text-xs font-semibold text-[#0F172A]">{task.title}</p>
-                      <div className="flex items-center justify-between mt-3 text-[11px] text-[#64748B]">
-                        <span>Assigned: {task.assignee}</span>
-                        <Button
-                          size="sm"
-                          className="h-6 text-[11px] px-2 py-0"
-                          onClick={() => handleAdvanceTask(task.id)}
-                        >
-                          Complete & Log
-                        </Button>
+                  .filter((t: any) => t.status === 'under_review' || t.status === 'in_progress')
+                  .map((task: any) => (
+                    <Card key={task.id} className="p-3.5 bg-white border-[#93C5FD] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-[#0F172A]">{task.title}</p>
+                        <span className="text-[10px] font-semibold bg-[#EFF6FF] text-[#1D4ED8] px-1.5 py-0.5 rounded">
+                          Review Pending
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#64748B]">{task.description}</p>
+                      <div className="flex items-center justify-between pt-2 border-t border-[#F1F5F9] text-[11px]">
+                        <span className="text-[#64748B]">Reward: {task.credits_reward || 25} cr</span>
+                        {isStudent && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="h-6 text-[11px] px-2 py-0"
+                            onClick={() => {
+                              setSelectedTaskId(task.id);
+                              setIsSubmitModalOpen(true);
+                            }}
+                          >
+                            Update Code
+                          </Button>
+                        )}
                       </div>
                     </Card>
                   ))}
@@ -383,23 +508,22 @@ export function WorkspacePage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-[#15803D]">
-                  Completed & Verified ({tasks.filter((t) => t.status === 'completed').length})
+                  Completed & Verified ({tasks.filter((t: any) => t.status === 'completed').length})
                 </span>
               </div>
               <div className="space-y-2">
                 {tasks
-                  .filter((t) => t.status === 'completed')
-                  .map((task) => (
-                    <Card key={task.id} className="p-3.5 bg-[#F0FDF4] border-[#BBF7D0]">
-                      <div className="flex items-center gap-1.5 text-xs font-semibold text-[#166534]">
-                        <CheckCircle2 size={13} />
-                        <span>{task.title}</span>
+                  .filter((t: any) => t.status === 'completed')
+                  .map((task: any) => (
+                    <Card key={task.id} className="p-3.5 bg-white border-[#86EFAC] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-[#0F172A]">{task.title}</p>
+                        <CheckCircle2 size={14} className="text-[#15803D]" />
                       </div>
-                      <div className="flex items-center justify-between mt-2 text-[11px] text-[#15803D]">
-                        <span>Completed by {task.assignee}</span>
-                        <span className="font-mono text-[10px] bg-white px-1.5 py-0.5 rounded border border-[#86EFAC]">
-                          Hash Locked ✓
-                        </span>
+                      <p className="text-[11px] text-[#64748B]">{task.description}</p>
+                      <div className="flex items-center justify-between pt-2 border-t border-[#F1F5F9] text-[11px]">
+                        <span className="font-semibold text-[#15803D]">Verified on Ledger ✓</span>
+                        <span className="font-bold text-[#0F172A]">+{task.credits_reward || 25} cr</span>
                       </div>
                     </Card>
                   ))}
@@ -409,529 +533,611 @@ export function WorkspacePage() {
         </div>
       )}
 
-      {/* TAB 2: AI Policy Gateway & Assistant */}
-      {activeTab === 'ai-gateway' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left 2 Cols: Chat Interface */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Policy Enforcement Banner */}
-            <div className="p-3 bg-[#FEF3C7] border border-[#FDE68A] rounded-lg text-xs text-[#92400E] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Shield size={16} className="text-[#B45309]" />
-                <span>
-                  <strong>AI Policy Gateway Active:</strong> Sensitivity Level is{' '}
-                  <span className="uppercase font-bold">{project.sensitivity_level}</span>.
-                  External cloud LLM access is blocked. Running via air-gapped local container (Ollama / Llama-3).
-                </span>
+      {/* TAB 2: Mentor Review Queue */}
+      {activeTab === 'reviews' && (
+        <div className="space-y-4">
+          <Card className="p-6 bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A]">Pending Deliverable Reviews</h3>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  Mentor inspection queue. Approving releases verified credits and logs a block to the SHA-256 ledger.
+                </p>
               </div>
-              <span className="text-[10px] bg-[#92400E] text-white px-2 py-0.5 rounded font-mono">
-                EGRESS: ZERO
-              </span>
             </div>
 
-            {/* Agent Persona Selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-[#334155]">Active Agent:</span>
-              {(['research', 'developer', 'reviewer'] as const).map((agent) => (
-                <button
-                  key={agent}
-                  onClick={() => setSelectedAgent(agent)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer capitalize transition-colors ${
-                    selectedAgent === agent
-                      ? 'bg-[#0F172A] text-white'
-                      : 'bg-white border border-[#CBD5E1] text-[#64748B] hover:text-[#0F172A]'
-                  }`}
-                >
-                  {agent} Agent
-                </button>
+            {contributions.filter((c: any) => c.status === 'under_review').length === 0 ? (
+              <div className="p-12 text-center text-xs text-[#64748B]">
+                <CheckCircle2 size={32} className="mx-auto text-[#15803D] mb-2" />
+                <p className="font-semibold text-[#0F172A]">No submissions pending review</p>
+                <p className="text-[11px] text-[#64748B] mt-0.5">
+                  When contributors submit code deliverables, they appear here for mentor evaluation.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {contributions
+                  .filter((c: any) => c.status === 'under_review')
+                  .map((c: any) => (
+                    <div key={c.id} className="p-4 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] space-y-3">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-[#0F172A] flex items-center gap-2">
+                            <Code size={14} className="text-[#1D4ED8]" />
+                            {c.file_name} — {c.task_title || 'Milestone Task'}
+                          </p>
+                          <p className="text-[11px] text-[#64748B] mt-0.5">
+                            Contributor: <strong className="text-[#0F172A]">{c.display_name || c.contributor_id}</strong> • AI Involvement: <code className="text-[#0F172A]">{c.ai_involvement}</code>
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              setActiveReviewContrib(c);
+                              setIsReviewModalOpen(true);
+                            }}
+                          >
+                            Inspect & Review
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-[#334155]">{c.description}</p>
+                      <div className="p-2 bg-white rounded border border-[#E2E8F0] text-[10px] font-mono text-[#64748B] truncate">
+                        SHA-256 Content Hash: {c.content_hash}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* TAB 3: Contributions Log */}
+      {activeTab === 'contributions' && (
+        <div className="space-y-4">
+          <Card className="p-6 bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A]">All Verified Work Contributions</h3>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  Permanent record of approved code, data artifacts, and milestone deliverables.
+                </p>
+              </div>
+            </div>
+
+            {contributions.length === 0 ? (
+              <div className="p-12 text-center text-xs text-[#64748B]">
+                No contributions logged yet. Students can submit deliverables from the Milestones & Tasks tab.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F1F5F9]">
+                {contributions.map((c: any) => (
+                  <div key={c.id} className="py-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Code size={14} className="text-[#1D4ED8]" />
+                        <span className="text-xs font-bold text-[#0F172A]">{c.file_name}</span>
+                        <StatusBadge status={c.status} />
+                      </div>
+                      {c.credits_awarded > 0 && (
+                        <span className="text-xs font-bold text-[#15803D] bg-[#F0FDF4] px-2 py-0.5 rounded border border-[#DCFCE7]">
+                          +{c.credits_awarded} Credits Awarded
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-[#475569]">{c.description}</p>
+                    <div className="flex items-center justify-between text-[11px] text-[#64748B]">
+                      <span>Contributor: {c.display_name || c.contributor_id}</span>
+                      <span className="font-mono text-[10px]">Hash: {c.content_hash?.slice(0, 16)}...</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* TAB 4: Confidential Data Room */}
+      {activeTab === 'data-room' && (
+        <div className="space-y-4">
+          <Card className="p-6 bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A]">Protected Data Room</h3>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  Downloads are dynamically stamped with a cryptographic watermark and recorded on the ledger.
+                </p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-[#F1F5F9]">
+              {files.map((f: any) => (
+                <div key={f.id} className="py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <FileText size={16} className={f.is_confidential ? 'text-[#D97706]' : 'text-[#1D4ED8]'} />
+                    <div>
+                      <p className="text-xs font-semibold text-[#0F172A] flex items-center gap-1.5">
+                        {f.name}
+                        {f.is_confidential ? (
+                          <span className="text-[10px] font-semibold bg-[#FEF3C7] text-[#92400E] px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                            <Lock size={10} /> Confidential
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold bg-[#F0FDF4] text-[#166534] px-1.5 py-0.5 rounded">
+                            Public
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-[11px] text-[#64748B]">
+                        Size: {f.file_size} • Sensitivity: {f.sensitivity_level}
+                      </p>
+                    </div>
+                  </div>
+
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<Download size={14} />}
+                    onClick={() => handleDownloadFile(f)}
+                  >
+                    Download Watermarked
+                  </Button>
+                </div>
               ))}
             </div>
+          </Card>
 
-            {/* Chat Box */}
-            <Card className="h-[420px] flex flex-col bg-white border-[#CBD5E1]">
-              <div className="flex-1 p-4 overflow-y-auto space-y-4">
-                {chatMessages.map((msg, i) => (
-                  <div
-                    key={i}
-                    className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
+          {watermarkedReceipt && (
+            <div className="p-4 bg-[#F0FDF4] border border-[#BBF7D0] rounded-lg space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-[#166534] flex items-center gap-1">
+                  <CheckCircle2 size={14} /> Cryptographic Watermark Injected
+                </span>
+                <button onClick={() => setWatermarkedReceipt(null)} className="text-[#166534] hover:underline">
+                  Dismiss
+                </button>
+              </div>
+              <p className="text-[#15803D]">
+                File '{watermarkedReceipt.file_name}' signed for authorized signatory <strong>{watermarkedReceipt.user_email}</strong>.
+              </p>
+              <div className="p-2 bg-white rounded border border-[#DCFCE7] font-mono text-[11px] text-[#334155] break-all">
+                Watermark Hash: {watermarkedReceipt.watermark_hash}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 5: AI Policy Gateway */}
+      {activeTab === 'ai-gateway' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card className="lg:col-span-2 p-5 bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
+                  <Bot size={16} className="text-[#1D4ED8]" /> AI Policy Gateway Assistant
+                </h3>
+                <p className="text-[11px] text-[#64748B]">
+                  Policy: {project.sensitivity_level === 'high' || project.sensitivity_level === 'critical' ? 'LOCAL AIR-GAPPED CONTAINER (Ollama Llama-3)' : 'CLOUD REASONING ROUTER'}
+                </p>
+              </div>
+              <div className="flex gap-1.5">
+                {(['developer', 'research', 'reviewer'] as const).map((agent) => (
+                  <button
+                    key={agent}
+                    onClick={() => setSelectedAgent(agent)}
+                    className={`px-2.5 py-1 rounded text-xs capitalize cursor-pointer ${
+                      selectedAgent === agent
+                        ? 'bg-[#1D4ED8] text-white font-semibold'
+                        : 'bg-[#F1F5F9] text-[#64748B]'
+                    }`}
                   >
-                    <div
-                      className={`max-w-[85%] rounded-lg p-3 text-xs leading-relaxed ${
-                        msg.sender === 'user'
-                          ? 'bg-[#1D4ED8] text-white'
-                          : 'bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A]'
-                      }`}
-                    >
-                      {msg.model && (
-                        <div className="text-[10px] font-mono text-[#64748B] mb-1 flex items-center gap-1">
-                          <Bot size={11} /> {msg.model}
-                        </div>
-                      )}
-                      <p className="whitespace-pre-wrap">{msg.text}</p>
-                    </div>
+                    {agent}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-                    {msg.requiresApproval && (
-                      <div className="mt-1 flex items-center gap-2 text-[11px]">
-                        <span className="text-[#B45309] font-medium flex items-center gap-1">
-                          <Clock size={11} /> Mentor Verification Required
-                        </span>
-                        {!msg.approved ? (
-                          <button
-                            onClick={() => {
-                              setChatMessages((prev) =>
-                                prev.map((m, idx) => (idx === i ? { ...m, approved: true } : m))
-                              );
-                            }}
-                            className="text-[#15803D] font-bold hover:underline cursor-pointer"
-                          >
-                            [Approve Artifact & Sign]
-                          </button>
-                        ) : (
-                          <span className="text-[#15803D] font-bold">✓ Approved & Logged</span>
-                        )}
+            {/* Chat Messages */}
+            <div className="space-y-3 h-80 overflow-y-auto p-2 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
+              {chatMessages.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
+                >
+                  <div
+                    className={`max-w-[85%] p-3 rounded-lg text-xs leading-relaxed ${
+                      msg.sender === 'user'
+                        ? 'bg-[#1D4ED8] text-white'
+                        : 'bg-white border border-[#CBD5E1] text-[#0F172A] shadow-sm'
+                    }`}
+                  >
+                    {msg.sender === 'agent' && (
+                      <div className="text-[10px] font-bold text-[#1D4ED8] mb-1 flex items-center gap-1">
+                        <Bot size={11} /> {msg.model || 'ResearchMesh Gateway'}
+                      </div>
+                    )}
+                    <pre className="whitespace-pre-wrap font-sans">{msg.text}</pre>
+                    {msg.promptHash && (
+                      <div className="mt-2 pt-1 border-t border-[#E2E8F0] text-[9px] font-mono text-[#64748B]">
+                        Audit Hash: {msg.promptHash.slice(0, 16)}...
                       </div>
                     )}
                   </div>
-                ))}
-                {isAiLoading && (
-                  <div className="flex items-center gap-2 text-xs text-[#64748B] p-2">
-                    <RefreshCw size={14} className="animate-spin text-[#1D4ED8]" />
-                    <span>Executing local model inference inside edge sandbox...</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Input Area */}
-              <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC]">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder={`Ask ${selectedAgent} agent about code, architecture, or clinical benchmarks...`}
-                    value={promptInput}
-                    onChange={(e) => setPromptInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSendPrompt()}
-                    className="flex-1 px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
-                  />
-                  <Button
-                    size="sm"
-                    icon={<Send size={14} />}
-                    onClick={() => handleSendPrompt()}
-                    disabled={isAiLoading || !promptInput.trim()}
-                  >
-                    Send
-                  </Button>
                 </div>
-
-                {/* Preset Prompt Buttons */}
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  <span className="text-[10px] text-[#64748B] self-center">Test Presets:</span>
-                  {[
-                    'Analyze NovaScan v3 normalization parameters',
-                    'Check Raspberry Pi 4 RAM constraints for ONNX model',
-                    'Draft clinical validation criteria for FDA Class II',
-                  ].map((p, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleSendPrompt(p)}
-                      className="text-[10px] bg-white text-[#475569] border border-[#CBD5E1] px-2 py-0.5 rounded hover:bg-[#F1F5F9] cursor-pointer"
-                    >
-                      {p}
-                    </button>
-                  ))}
+              ))}
+              {isAiLoading && (
+                <div className="flex items-center gap-2 text-xs text-[#64748B] p-2">
+                  <Loader2 size={14} className="animate-spin text-[#1D4ED8]" />
+                  <span>Processing through isolated edge policy gateway...</span>
                 </div>
-              </div>
-            </Card>
-          </div>
-
-          {/* Right Col: AI Activity Audit Log */}
-          <div className="space-y-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-[#64748B]">
-              AI Activity Audit Log
-            </h3>
-            <Card className="p-4 bg-white space-y-3">
-              <p className="text-[11px] text-[#64748B]">
-                All AI queries are hashed and logged to ensure non-human generation is visibly attributed.
-              </p>
-              <div className="space-y-2.5 max-h-[460px] overflow-y-auto">
-                {aiLogs.map((log) => (
-                  <div key={log.id} className="p-2.5 rounded border border-[#E2E8F0] text-xs space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-[#0F172A] capitalize">{log.agent_type} Agent</span>
-                      <span className="text-[10px] font-mono text-[#64748B]">{log.model}</span>
-                    </div>
-                    <p className="text-[#334155] line-clamp-1 italic">"{log.request}"</p>
-                    <div className="flex items-center justify-between pt-1 border-t border-[#F1F5F9] text-[10px]">
-                      <span className="text-[#64748B]">
-                        {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <span
-                        className={`font-semibold ${
-                          log.approval_status === 'approved' ? 'text-[#15803D]' : 'text-[#B45309]'
-                        }`}
-                      >
-                        {log.approval_status.toUpperCase()}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: Confidential Data Room & Watermarked Download */}
-      {activeTab === 'files' && (
-        <Card className="p-6 bg-white space-y-4">
-          <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-4">
-            <div>
-              <h2 className="text-base font-bold text-[#0F172A] flex items-center gap-2">
-                <Lock size={16} className="text-[#991B1B]" /> Confidential Research Data Room
-              </h2>
-              <p className="text-xs text-[#64748B] mt-0.5">
-                Protected proprietary assets. Every download is cryptographically watermarked and audited.
-              </p>
-            </div>
-            <SensitivityBadge level="high" />
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="border-b border-[#E2E8F0] text-[#64748B] uppercase tracking-wider text-[11px]">
-                  <th className="py-2.5 px-3">File Name</th>
-                  <th className="py-2.5 px-3">Size</th>
-                  <th className="py-2.5 px-3">Confidentiality</th>
-                  <th className="py-2.5 px-3">Export Policy</th>
-                  <th className="py-2.5 px-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#F1F5F9]">
-                {[
-                  { name: 'novascan_v3_preprocessing.py', size: '48 KB', sens: 'high', policy: 'Restricted (Air-gapped)' },
-                  { name: 'retinal_annotations_sample_1000.csv', size: '2.4 MB', sens: 'critical', policy: 'Restricted (Signatories Only)' },
-                  { name: 'edge_benchmark_jetson_nano.json', size: '12 KB', sens: 'medium', policy: 'Authorized Team' },
-                  { name: 'researchmesh_charter_v1_signed.pdf', size: '180 KB', sens: 'low', policy: 'Open to Members' },
-                ].map((file, i) => (
-                  <tr key={i} className="hover:bg-[#F8FAFC]">
-                    <td className="py-3 px-3 font-semibold text-[#0F172A] flex items-center gap-2">
-                      <FileText size={14} className="text-[#1D4ED8]" />
-                      {file.name}
-                    </td>
-                    <td className="py-3 px-3 text-[#64748B]">{file.size}</td>
-                    <td className="py-3 px-3">
-                      <SensitivityBadge level={file.sens as any} />
-                    </td>
-                    <td className="py-3 px-3 text-[#64748B]">{file.policy}</td>
-                    <td className="py-3 px-3 text-right">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon={<Download size={13} />}
-                        onClick={() =>
-                          setWatermarkedFile({
-                            name: file.name,
-                            size: file.size,
-                            hash: 'a7b8c9d0e1f234567890abcdef123456',
-                          })
-                        }
-                      >
-                        Protected Download
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
-      {/* TAB 4: Contributions Provenance */}
-      {activeTab === 'contributions' && (
-        <Card className="p-6 bg-white space-y-4">
-          <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-4">
-            <div>
-              <h2 className="text-base font-bold text-[#0F172A]">Contribution Provenance Log</h2>
-              <p className="text-xs text-[#64748B] mt-0.5">
-                Every code commit, review, and AI-assisted artifact recorded with credit distribution.
-              </p>
-            </div>
-            <Button size="sm" icon={<Plus size={14} />} onClick={() => setIsContributionModalOpen(true)}>
-              Record Contribution
-            </Button>
-          </div>
-
-          <div className="space-y-3">
-            {contributions.map((c) => {
-              const contributor = DEMO_USERS.find((u) => u.id === c.contributor_id);
-              return (
-                <div key={c.id} className="p-4 rounded-lg border border-[#E2E8F0] text-xs space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-[#0F172A]">{contributor?.display_name || 'Contributor'}</span>
-                      <span className="text-[11px] text-[#64748B] capitalize">({c.role})</span>
-                      <span className="text-xs font-semibold text-[#1D4ED8] bg-[#EFF6FF] px-2 py-0.5 rounded capitalize">
-                        {c.type}
-                      </span>
-                      {c.ai_involvement !== 'none' && (
-                        <span className="text-[10px] font-semibold text-[#B45309] bg-[#FFFBEB] px-1.5 py-0.5 rounded border border-[#FEF3C7]">
-                          AI-Assisted (Llama-3 Directed)
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-bold text-[#0F172A]">+{c.credits_awarded} Credits</span>
-                      <StatusBadge status={c.status} />
-                    </div>
-                  </div>
-                  <p className="text-[#334155]">{c.description}</p>
-                  <div className="flex items-center justify-between text-[11px] text-[#64748B] pt-1">
-                    <span>Artifact: <code className="text-[#1D4ED8]">{c.artifact_url}</code></span>
-                    <span>{new Date(c.created_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
-
-      {/* TAB 5: SHA-256 Tamper-Evident Ledger */}
-      {activeTab === 'ledger' && (
-        <div className="space-y-6">
-          {/* Controls Bar */}
-          <Card className="p-4 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
-                <Shield size={16} className="text-[#1D4ED8]" /> Cryptographic SHA-256 Ledger
-              </h3>
-              <p className="text-xs text-[#64748B] mt-0.5">
-                Sequential hash chain proving origin, authorship, and tamper-resistance.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button size="sm" icon={<RefreshCw size={14} />} onClick={handleVerifyLedger}>
-                Verify Ledger Integrity
-              </Button>
-              {!isTampered ? (
-                <Button size="sm" variant="danger" icon={<AlertTriangle size={14} />} onClick={handleSimulateTamper}>
-                  Simulate Tampering
-                </Button>
-              ) : (
-                <Button size="sm" variant="secondary" onClick={handleRestoreLedger}>
-                  Restore Ledger
-                </Button>
               )}
             </div>
+
+            {/* Prompt Input */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Ask AI assistant about dataset preprocessing, edge inference or benchmark tests..."
+                value={promptInput}
+                onChange={(e) => setPromptInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendPrompt()}
+                className="flex-1 px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md text-[#0F172A]"
+              />
+              <Button size="sm" onClick={() => handleSendPrompt()} disabled={isAiLoading}>
+                <Send size={14} />
+              </Button>
+            </div>
           </Card>
 
-          {/* Verification Result Banner */}
-          {verificationResult && (
-            <div
-              className={`p-4 rounded-lg border text-xs leading-relaxed ${
-                verificationResult.valid
-                  ? 'bg-[#F0FDF4] border-[#86EFAC] text-[#166534]'
-                  : 'bg-[#FEF2F2] border-[#FCA5A5] text-[#991B1B]'
-              }`}
-            >
-              <div className="flex items-center gap-2 font-bold mb-1">
-                {verificationResult.valid ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                <span>{verificationResult.valid ? 'LEDGER VERIFIED INTACT' : 'TAMPER DETECTED BY CRYPTOGRAPHIC AUDIT'}</span>
+          {/* Policy Overview Sidebar */}
+          <div className="space-y-4">
+            <Card className="p-5 bg-white space-y-3">
+              <h4 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">
+                Active Governance Rules
+              </h4>
+              <div className="space-y-2 text-xs">
+                <div className="p-2.5 bg-[#EFF6FF] rounded border border-[#DBEAFE] space-y-1">
+                  <span className="font-bold text-[#1D4ED8] block">Air-gapped Edge Model</span>
+                  <p className="text-[11px] text-[#1E40AF]">
+                    Ollama / Llama-3 running on private container. High-sensitivity dataset prompts cannot leave the network.
+                  </p>
+                </div>
+                <div className="p-2.5 bg-[#FEF3C7] rounded border border-[#FDE68A] space-y-1">
+                  <span className="font-bold text-[#92400E] block">Human Review Required</span>
+                  <p className="text-[11px] text-[#92400E]">
+                    AI output alone cannot earn ledger credits without mentor validation.
+                  </p>
+                </div>
               </div>
-              <p>{verificationResult.message}</p>
-            </div>
-          )}
-
-          {/* Block Chain Display */}
-          <div className="space-y-3">
-            {ledgerEntries.map((entry, index) => {
-              const isCorrupted = isTampered && index === 2;
-              return (
-                <Card
-                  key={entry.id}
-                  className={`p-4 bg-white transition-all duration-150 ${
-                    isCorrupted
-                      ? 'border-[#EF4444] bg-[#FEF2F2] ring-2 ring-[#EF4444]'
-                      : 'border-[#CBD5E1]'
-                  }`}
-                >
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 text-xs">
-                    <div className="space-y-1.5 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-xs bg-[#0F172A] text-white px-2 py-0.5 rounded">
-                          Block #{entry.id}
-                        </span>
-                        <span className="font-semibold text-[#0F172A]">{entry.action}</span>
-                        {isCorrupted && (
-                          <span className="text-[10px] font-bold text-[#B91C1C] bg-[#FEE2E2] px-1.5 py-0.5 rounded animate-pulse">
-                            CORRUPTED ENTRY
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="font-mono text-[11px] space-y-0.5 text-[#475569]">
-                        <div>
-                          <span className="text-[#94A3B8]">Content Hash: </span>
-                          <span className="text-[#0F172A]">{entry.content_hash}</span>
-                        </div>
-                        <div>
-                          <span className="text-[#94A3B8]">Prev Block Hash: </span>
-                          <span className="text-[#64748B]">{entry.previous_hash}</span>
-                        </div>
-                        <div>
-                          <span className="text-[#94A3B8]">Entry SHA-256: </span>
-                          <strong className={isCorrupted ? 'text-[#B91C1C]' : 'text-[#1D4ED8]'}>
-                            {entry.entry_hash}
-                          </strong>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="text-right text-[11px] text-[#64748B] shrink-0">
-                      <div>Actor: <strong className="text-[#0F172A]">{entry.actor_type.toUpperCase()}</strong></div>
-                      <div>{new Date(entry.timestamp).toLocaleString()}</div>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
+            </Card>
           </div>
         </div>
       )}
 
-      {/* TAB 6: Charter & Team */}
-      {activeTab === 'charter' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card className="md:col-span-2 p-6 bg-white space-y-4">
-            <h3 className="text-base font-bold text-[#0F172A] border-b border-[#E2E8F0] pb-3">
-              Research Charter Terms — Active Agreement
-            </h3>
-            <div className="space-y-3 text-xs text-[#334155] leading-relaxed">
-              <p><strong>IP Allocation:</strong> {project.ip_ownership}</p>
-              <p><strong>Authorship Threshold:</strong> {project.authorship_rules}</p>
-              <p><strong>Commercialization:</strong> {project.commercialization_terms || 'Non-commercial open research.'}</p>
-              <p><strong>AI Usage:</strong> All AI generated code and text must be processed via Policy Gateway with human sign-off.</p>
-            </div>
-          </Card>
-
+      {/* TAB 6: SHA-256 Provenance Ledger */}
+      {activeTab === 'ledger' && (
+        <div className="space-y-6">
           <Card className="p-6 bg-white space-y-4">
-            <h3 className="text-base font-bold text-[#0F172A] border-b border-[#E2E8F0] pb-3">
-              Workspace Team ({members.length})
-            </h3>
-            <div className="space-y-3">
-              {members.map((m) => {
-                const u = DEMO_USERS.find((usr) => usr.id === m.user_id);
-                return (
-                  <div key={m.id} className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold">
-                      {u?.display_name.charAt(0)}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E2E8F0] pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A] flex items-center gap-2">
+                  <Shield size={16} className="text-[#1D4ED8]" /> Cryptographic Provenance Ledger
+                </h3>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  Sequential SHA-256 hash-chained blocks recording all project creation, submissions, reviews, and rewards.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={handleVerifyLedger}>
+                  Verify Ledger Integrity
+                </Button>
+                {!isTampered ? (
+                  <Button size="sm" variant="danger" onClick={handleSimulateTamper}>
+                    Simulate Tampering
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={handleRestoreLedger}>
+                    Restore Canonical Ledger
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* Verification Status Alert */}
+            {verificationResult && (
+              <div
+                className={`p-4 rounded-lg border text-xs space-y-1 ${
+                  verificationResult.valid
+                    ? 'bg-[#F0FDF4] border-[#86EFAC] text-[#15803D]'
+                    : 'bg-[#FEF2F2] border-[#FCA5A5] text-[#991B1B]'
+                }`}
+              >
+                <div className="flex items-center gap-2 font-bold">
+                  {verificationResult.valid ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                  <span>{verificationResult.message}</span>
+                </div>
+                {!verificationResult.valid && (
+                  <p className="text-[11px] text-[#7F1D1D]">
+                    Tamper detected at Block #{verificationResult.broken_block_id}. The calculated cryptographic hash does not match stored block content.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Ledger Blocks List */}
+            <div className="space-y-3 pt-2">
+              {ledgerEntries.map((block) => (
+                <div
+                  key={block.id}
+                  className={`p-4 rounded-lg border text-xs font-mono space-y-2 transition-colors ${
+                    block.is_tampered || (isTampered && block.id === 2)
+                      ? 'border-[#EF4444] bg-[#FEF2F2]'
+                      : 'border-[#E2E8F0] bg-[#F8FAFC]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between font-sans">
+                    <span className="font-bold text-[#0F172A] flex items-center gap-1.5">
+                      Block #{block.id} • {block.action}
+                    </span>
+                    <span className="text-[10px] text-[#64748B]">
+                      {new Date(block.timestamp).toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px] break-all">
+                    <div>
+                      <span className="text-[#64748B] block">Previous Hash:</span>
+                      <code className="text-[#334155]">{block.previous_hash}</code>
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-[#0F172A]">{u?.display_name}</p>
+                      <span className="text-[#64748B] block">Entry Hash (SHA-256):</span>
+                      <code className="text-[#1D4ED8] font-bold">{block.entry_hash}</code>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* TAB 7: Charter & Team */}
+      {activeTab === 'charter' && (
+        <div className="space-y-6">
+          <Card className="p-6 bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#0F172A]">Project Charter Terms (Version 1.0)</h3>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  Governed legal agreement accepted by all active team members.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-[#334155]">
+              <div className="p-3 bg-[#F8FAFC] rounded border border-[#E2E8F0]">
+                <strong className="text-[#0F172A] block mb-1">Clause 1: Scope & Problem Statement</strong>
+                <p>{charter?.scope || project.public_summary}</p>
+              </div>
+              <div className="p-3 bg-[#F8FAFC] rounded border border-[#E2E8F0]">
+                <strong className="text-[#0F172A] block mb-1">Clause 2: Intellectual Property & Attribution</strong>
+                <p>{charter?.ip_terms || project.ip_ownership}</p>
+              </div>
+              <div className="p-3 bg-[#F8FAFC] rounded border border-[#E2E8F0]">
+                <strong className="text-[#0F172A] block mb-1">Clause 3: Confidentiality & Data Residency</strong>
+                <p>{charter?.confidentiality_terms || "Confidential assets restricted to signatories. Violations recorded on ledger."}</p>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-[#E2E8F0]">
+              <h4 className="text-xs font-bold text-[#0F172A] mb-3">Project Team Members</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {members.map((m: any) => (
+                  <div key={m.user_id} className="p-3 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold">
+                      {(m.display_name || 'U').charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-[#0F172A]">{m.display_name || 'Researcher'}</p>
                       <p className="text-[10px] text-[#64748B] capitalize">{m.role.replace('_', ' ')}</p>
                     </div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           </Card>
         </div>
       )}
 
-      {/* Contribution Modal */}
+      {/* MODAL 1: Create Task Modal */}
       <Modal
-        isOpen={isContributionModalOpen}
-        onClose={() => setIsContributionModalOpen(false)}
-        title="Record Research Contribution"
-        subtitle="Cryptographically logged to append-only SHA-256 ledger"
+        isOpen={isTaskModalOpen}
+        onClose={() => setIsTaskModalOpen(false)}
+        title="Create Research Task"
+        subtitle={project.title}
       >
-        <form onSubmit={handleRecordContribution} className="space-y-4">
-          <Select
-            label="Contribution Type"
-            value={contribType}
-            onChange={(e) => setContribType(e.target.value)}
-            options={[
-              { value: 'code', label: 'Code Implementation' },
-              { value: 'research', label: 'Research Paper / Theoretical Analysis' },
-              { value: 'dataset', label: 'Dataset Curation / Cleaning' },
-              { value: 'review', label: 'Peer Review & Clinical Validation' },
-              { value: 'experiment', label: 'Edge Benchmark & Experimentation' },
-            ]}
-          />
-
-          <Select
-            label="AI Involvement Disclosure"
-            value={contribAiInvolvement}
-            onChange={(e) => setContribAiInvolvement(e.target.value as any)}
-            options={[
-              { value: 'none', label: 'None (Pure Human Contribution)' },
-              { value: 'ai_assisted', label: 'AI-Assisted (Human Directed & Reviewed)' },
-              { value: 'ai_generated', label: 'AI-Generated (Requires Explicit Mentor Approval)' },
-            ]}
-          />
-
-          <Textarea
-            label="Contribution Description"
-            placeholder="Describe the research deliverable, methodology, or PR details..."
-            rows={3}
-            value={contribDesc}
-            onChange={(e) => setContribDesc(e.target.value)}
+        <form onSubmit={handleCreateTask} className="space-y-4">
+          <Input
+            label="Task Title"
+            placeholder="e.g. Build preprocessing script"
+            value={taskTitle}
+            onChange={(e) => setTaskTitle(e.target.value)}
             required
           />
 
-          <Input
-            label="Artifact Repository URL or SHA-256 Hash"
-            placeholder="e.g., https://github.com/novabiotech/retina-edge/commit/7a8b9c"
-            value={contribArtifact}
-            onChange={(e) => setContribArtifact(e.target.value)}
+          <Textarea
+            label="Task Description & Acceptance Criteria"
+            placeholder="Describe technical implementation requirements..."
+            rows={3}
+            value={taskDescription}
+            onChange={(e) => setTaskDescription(e.target.value)}
+            required
           />
 
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Reward Credits"
+              type="number"
+              value={taskReward}
+              onChange={(e) => setTaskReward(Number(e.target.value))}
+              required
+            />
+            <div>
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">Milestone</label>
+              <select
+                value={taskMilestoneId}
+                onChange={(e) => setTaskMilestoneId(e.target.value)}
+                className="w-full h-10 px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md"
+              >
+                {milestones.map((m: any) => (
+                  <option key={m.id} value={m.id}>
+                    {m.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" size="sm" onClick={() => setIsContributionModalOpen(false)}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setIsTaskModalOpen(false)}>
               Cancel
             </Button>
             <Button type="submit" size="sm">
-              Commit to Ledger
+              Create Task
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Watermarked Download Preview Modal */}
+      {/* MODAL 2: Submit Work Modal (Code Upload) */}
       <Modal
-        isOpen={!!watermarkedFile}
-        onClose={() => setWatermarkedFile(null)}
-        title="Protected File Watermarking"
-        subtitle={watermarkedFile?.name}
+        isOpen={isSubmitModalOpen}
+        onClose={() => setIsSubmitModalOpen(false)}
+        title="Submit Code Deliverable"
+        subtitle="Upload source code for mentor review and verified ledger credits"
+        maxWidth="lg"
+      >
+        <form onSubmit={handleSubmitWork} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="File Name"
+              value={fileName}
+              onChange={(e) => setFileName(e.target.value)}
+              required
+            />
+            <div>
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">AI Involvement</label>
+              <select
+                value={aiInvolvement}
+                onChange={(e) => setAiInvolvement(e.target.value as any)}
+                className="w-full h-10 px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-md"
+              >
+                <option value="none">None (100% Human Authored)</option>
+                <option value="ai_assisted">AI-Assisted (Policy Gateway Verified)</option>
+                <option value="ai_generated">AI-Generated with Human Oversight</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-[#334155] mb-1">
+              Python Code Implementation (preprocessing.py)
+            </label>
+            <textarea
+              rows={10}
+              value={fileContent}
+              onChange={(e) => setFileContent(e.target.value)}
+              className="w-full p-3 font-mono text-xs bg-[#0F172A] text-[#F8FAFC] rounded-lg border border-[#334155] focus:outline-none"
+              required
+            />
+          </div>
+
+          <Textarea
+            label="Submission Notes & Benchmark Results"
+            value={submissionDesc}
+            onChange={(e) => setSubmissionDesc(e.target.value)}
+            rows={2}
+            required
+          />
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setIsSubmitModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={isSubmittingWork}>
+              {isSubmittingWork ? 'Hashing & Submitting...' : 'Submit to Mentor Review Queue'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL 3: Mentor Review Modal */}
+      <Modal
+        isOpen={isReviewModalOpen}
+        onClose={() => setIsReviewModalOpen(false)}
+        title="Review Code Deliverable"
+        subtitle={activeReviewContrib?.file_name}
+        maxWidth="lg"
       >
         <div className="space-y-4 text-xs">
-          <div className="p-4 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-[#991B1B] space-y-2">
-            <p className="font-bold flex items-center gap-1.5">
-              <Lock size={14} /> DYNAMIC WATERMARK ATTACHED
+          <div className="p-3 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] space-y-1">
+            <p className="font-semibold text-[#0F172A]">
+              Contributor: {activeReviewContrib?.display_name || activeReviewContrib?.contributor_id}
             </p>
-            <p className="font-mono text-[11px] bg-white p-2.5 rounded border border-[#FECACA]">
-              CONFIDENTIAL • LICENSED TO: {user?.display_name.toUpperCase()} ({user?.email}) • TIMESTAMP: {new Date().toISOString()} • SHA-256 HASH: {watermarkedFile?.hash} • TAMPERING PROHIBITED BY CHARTER
-            </p>
-            <p className="text-[11px]">
-              This file contains proprietary research data. Downloading logs an audit record to the admin security ledger.
+            <p className="text-[#64748B]">{activeReviewContrib?.description}</p>
+            <p className="font-mono text-[10px] text-[#1D4ED8]">
+              Hash: {activeReviewContrib?.content_hash}
             </p>
           </div>
 
+          <div>
+            <label className="block font-semibold text-[#334155] mb-1">Review Outcome</label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setReviewVerdict('approved')}
+                className={`p-2.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer ${
+                  reviewVerdict === 'approved'
+                    ? 'border-[#15803D] bg-[#F0FDF4] text-[#15803D]'
+                    : 'border-[#E2E8F0] text-[#64748B]'
+                }`}
+              >
+                <Check size={14} /> Approve & Award Credits
+              </button>
+              <button
+                type="button"
+                onClick={() => setReviewVerdict('rejected')}
+                className={`p-2.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer ${
+                  reviewVerdict === 'rejected'
+                    ? 'border-[#B91C1C] bg-[#FEF2F2] text-[#B91C1C]'
+                    : 'border-[#E2E8F0] text-[#64748B]'
+                }`}
+              >
+                <X size={14} /> Request Revisions
+              </button>
+            </div>
+          </div>
+
+          <Textarea
+            label="Mentor Feedback"
+            value={reviewComment}
+            onChange={(e) => setReviewComment(e.target.value)}
+            rows={3}
+            required
+          />
+
           <div className="flex justify-end gap-2 pt-2">
-            <Button size="sm" variant="secondary" onClick={() => setWatermarkedFile(null)}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setIsReviewModalOpen(false)}>
               Cancel
             </Button>
-            <Button
-              size="sm"
-              icon={<Download size={14} />}
-              onClick={() => {
-                alert(`Protected file "${watermarkedFile?.name}" downloaded with cryptographic watermark embedded.`);
-                setWatermarkedFile(null);
-              }}
-            >
-              Confirm & Download Watermarked File
+            <Button size="sm" onClick={handleReviewWork} disabled={isReviewing}>
+              {isReviewing ? 'Writing to Ledger...' : 'Commit Review Decision'}
             </Button>
           </div>
         </div>

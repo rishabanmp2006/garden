@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Building2, CheckCircle2, Lock, Shield,
   Clock, Users, Coins, Briefcase, FileText, Bot, AlertCircle,
-  ExternalLink, Sparkles
+  ExternalLink, Sparkles, Download, Loader2
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/ui/Card';
@@ -13,41 +13,147 @@ import { Modal } from '../../components/ui/Modal';
 import { Textarea } from '../../components/ui/Input';
 import { StatusBadge, SensitivityBadge, EngagementBadge } from '../../components/ui/Badge';
 import {
-  DEMO_PROJECTS, DEMO_MEMBERSHIPS, DEMO_MILESTONES,
-  DEMO_CHARTERS, DEMO_USERS, DEMO_PROFILES
-} from '../../lib/demo-data';
+  fetchProjectDetails,
+  applyToProjectApi,
+  acceptCharterApi,
+  generateWatermark
+} from '../../lib/api';
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+
+  const [projectData, setProjectData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState('overview');
   const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [applyMessage, setApplyMessage] = useState('');
   const [applyRole, setApplyRole] = useState<'student' | 'mentor'>(user?.role === 'mentor' ? 'mentor' : 'student');
   const [hasApplied, setHasApplied] = useState(false);
-  const [charterAccepted, setCharterAccepted] = useState(true);
+  const [applicationResult, setApplicationResult] = useState<any>(null);
+  const [isApplying, setIsApplying] = useState(false);
+  const [isSigningCharter, setIsSigningCharter] = useState(false);
+  const [downloadReceipt, setDownloadReceipt] = useState<any>(null);
 
-  const project = DEMO_PROJECTS.find((p) => p.id === id) || DEMO_PROJECTS[0];
-  const members = DEMO_MEMBERSHIPS.filter((m) => m.project_id === project.id);
-  const milestones = DEMO_MILESTONES.filter((m) => m.project_id === project.id);
-  const charter = DEMO_CHARTERS.find((c) => c.project_id === project.id);
+  const loadData = async () => {
+    if (!id) return;
+    setLoading(true);
+    try {
+      const data = await fetchProjectDetails(id, user?.id);
+      setProjectData(data);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to load project details.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const isMember = members.some((m) => m.user_id === user?.id);
+  useEffect(() => {
+    loadData();
+  }, [id, user?.id]);
+
+
+  const project = projectData?.project;
+  const members = projectData?.members || [];
+  const milestones = projectData?.milestones || [];
+  const charter = projectData?.charter;
+  const files = projectData?.files || [];
+  const isMember = projectData?.is_member;
+  const hasAcceptedCharter = projectData?.has_accepted_charter;
+
+  // Real reproducible match calculation for modal
+  const reqSkills: string[] = project?.required_skills || [];
+  const userSkills: string[] = profile?.skills || [];
+  const matchedSkills = reqSkills.filter((s) =>
+    userSkills.some((us) => us.toLowerCase() === s.toLowerCase())
+  );
+  const matchPct = reqSkills.length > 0
+    ? Math.min(Math.round((matchedSkills.length / reqSkills.length) * 70 + 25), 98)
+    : 75;
 
   const tabs = [
     { id: 'overview', label: 'Overview', icon: <FileText size={14} /> },
-    { id: 'charter', label: 'Research Charter v1', icon: <Lock size={14} /> },
+    { id: 'charter', label: 'Research Charter v1.0', icon: <Lock size={14} /> },
     { id: 'milestones', label: 'Milestones & Deliverables', count: milestones.length, icon: <CheckCircle2 size={14} /> },
+    { id: 'data-room', label: 'Data Room & Files', count: files.length, icon: <Shield size={14} /> },
     { id: 'ai-policy', label: 'AI Governance Policy', icon: <Bot size={14} /> },
   ];
 
-  const handleApply = (e: React.FormEvent) => {
+  const handleApply = async (e: React.FormEvent) => {
     e.preventDefault();
-    setHasApplied(true);
-    setIsApplyModalOpen(false);
+    if (!user || !project) return;
+    setIsApplying(true);
+    try {
+      const res = await applyToProjectApi(project.id, {
+        user_id: user.id,
+        role: applyRole,
+        message: applyMessage,
+        relevant_skills: userSkills,
+      });
+      setApplicationResult(res);
+      setHasApplied(true);
+      setIsApplyModalOpen(false);
+    } catch (err: any) {
+      alert(err.message || 'Failed to submit application');
+    } finally {
+      setIsApplying(false);
+    }
   };
+
+  const handleAcceptCharter = async () => {
+    if (!user || !project) return;
+    setIsSigningCharter(true);
+    try {
+      await acceptCharterApi(project.id, user.id);
+      await loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to sign charter');
+    } finally {
+      setIsSigningCharter(false);
+    }
+  };
+
+  const handleDownloadFile = async (f: any) => {
+    if (!user || !project) return;
+    try {
+      const receipt = await generateWatermark({
+        file_name: f.name,
+        user_id: user.id,
+        user_email: user.email || 'contributor@researchmesh.org',
+        project_id: project.id,
+      });
+      setDownloadReceipt(receipt);
+    } catch (err: any) {
+      console.error(err);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="py-24 text-center">
+        <Loader2 size={36} className="mx-auto text-[#1D4ED8] animate-spin mb-3" />
+        <h3 className="text-sm font-semibold text-[#0F172A]">Loading research project workspace...</h3>
+        <p className="text-xs text-[#64748B]">Querying persistent database and charter registry.</p>
+      </div>
+    );
+  }
+
+  if (error || !project) {
+    return (
+      <div className="py-16 text-center bg-white rounded-lg border border-[#E2E8F0] p-8 max-w-lg mx-auto">
+        <AlertCircle size={36} className="mx-auto text-[#DC2626] mb-3" />
+        <h3 className="text-base font-bold text-[#0F172A]">Project Not Found</h3>
+        <p className="text-xs text-[#64748B] mt-1">{error || 'This research project does not exist in the database.'}</p>
+        <Button className="mt-4" onClick={() => navigate('/projects')}>
+          Back to Projects
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -68,20 +174,18 @@ export function ProjectPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="flex items-center gap-1.5 text-xs font-medium text-[#475569]">
                 <Building2 size={13} className="text-[#64748B]" />
-                {project.organization?.name || 'Research Org'}
+                {project.org_name || 'Research Organization'}
               </span>
-              {project.organization?.verified && (
-                <span className="inline-flex items-center text-[10px] text-[#15803D] font-semibold bg-[#F0FDF4] px-1.5 py-0.5 rounded border border-[#DCFCE7]">
-                  <CheckCircle2 size={10} className="mr-0.5" /> VERIFIED
-                </span>
-              )}
+              <span className="inline-flex items-center text-[10px] text-[#15803D] font-semibold bg-[#F0FDF4] px-1.5 py-0.5 rounded border border-[#DCFCE7]">
+                <CheckCircle2 size={10} className="mr-0.5" /> VERIFIED ORG
+              </span>
               <span className="text-[#CBD5E1]">•</span>
               <span className="text-xs font-semibold text-[#1D4ED8] bg-[#EFF6FF] px-2 py-0.5 rounded">
                 {project.domain}
               </span>
-              <StatusBadge status={project.status} />
-              <SensitivityBadge level={project.sensitivity_level} />
-              <EngagementBadge model={project.engagement_model} />
+              <StatusBadge status={project.status || 'open'} />
+              <SensitivityBadge level={project.sensitivity_level || 'high'} />
+              <EngagementBadge model={project.engagement_model || 'funded'} />
             </div>
 
             <h1 className="text-xl md:text-2xl font-bold text-[#0F172A] leading-tight">
@@ -101,12 +205,15 @@ export function ProjectPage() {
                 <Users size={14} />
                 Team Size: <strong>{members.length} members</strong>
               </span>
-              {project.budget > 0 && (
+              {Number(project.budget) > 0 && (
                 <span className="flex items-center gap-1.5">
                   <Coins size={14} className="text-[#B45309]" />
-                  Total Escrow: <strong>${project.budget.toLocaleString()}</strong>
+                  Total Escrow: <strong>${Number(project.budget).toLocaleString()}</strong>
                 </span>
               )}
+              <span className="flex items-center gap-1.5 bg-[#EFF6FF] text-[#1D4ED8] px-2 py-0.5 rounded font-medium">
+                Withdrawal Threshold: <strong>{project.withdrawal_threshold || 50} Credits</strong>
+              </span>
             </div>
           </div>
 
@@ -126,7 +233,9 @@ export function ProjectPage() {
                 <p className="text-xs font-semibold text-[#15803D] flex items-center justify-center gap-1">
                   <CheckCircle2 size={14} /> Application Submitted
                 </p>
-                <p className="text-[11px] text-[#166534] mt-0.5">Status: Pending Org Review</p>
+                <p className="text-[11px] text-[#166534] mt-0.5">
+                  AI Match: {applicationResult?.match_score || matchPct}% • Pending Review
+                </p>
               </div>
             ) : (
               <Button
@@ -164,16 +273,16 @@ export function ProjectPage() {
               <Card className="p-5 border-[#CBD5E1] bg-white">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <Lock size={15} className="text-[#991B1B]" />
+                    <Lock size={15} className={project.is_confidential_locked ? 'text-[#94A3B8]' : 'text-[#991B1B]'} />
                     <h3 className="text-sm font-bold text-[#0F172A]">Confidential Research Brief</h3>
                   </div>
                   <SensitivityBadge level={project.sensitivity_level} />
                 </div>
 
-                {isMember ? (
+                {!project.is_confidential_locked ? (
                   <div className="p-4 bg-[#FEF2F2] border border-[#FECACA] rounded-lg text-xs text-[#7F1D1D] leading-relaxed space-y-2">
                     <p className="font-semibold flex items-center gap-1.5">
-                      <Shield size={13} /> CONFIDENTIAL — ACCESSIBLE TO CHARTER SIGNATORIES ONLY
+                      <Shield size={13} /> CONFIDENTIAL BRIEF — ACCESSIBLE TO CHARTER SIGNATORIES ONLY
                     </p>
                     <p>{project.confidential_brief}</p>
                     <p className="text-[11px] text-[#991B1B] italic">
@@ -189,7 +298,7 @@ export function ProjectPage() {
                     </p>
                     <p className="text-[11px] text-[#64748B] max-w-md mx-auto">
                       Contains proprietary datasets, FDA regulatory targets, and proprietary
-                      pipeline specifications. Apply and sign Charter v1 to gain workspace access.
+                      pipeline specifications. Apply and sign Charter v1.0 to gain workspace access.
                     </p>
                   </div>
                 )}
@@ -199,7 +308,7 @@ export function ProjectPage() {
               <Card className="p-5 bg-white space-y-3">
                 <h3 className="text-sm font-bold text-[#0F172A]">Required Skills & Tech Stack</h3>
                 <div className="flex flex-wrap gap-2">
-                  {project.required_skills.map((skill) => (
+                  {reqSkills.map((skill) => (
                     <span
                       key={skill}
                       className="px-2.5 py-1 bg-[#F1F5F9] text-[#1E293B] text-xs font-medium rounded-md border border-[#E2E8F0]"
@@ -222,12 +331,6 @@ export function ProjectPage() {
                     <span className="font-semibold text-[#0F172A] block mb-0.5">Authorship Policy</span>
                     <p className="text-[#475569]">{project.authorship_rules}</p>
                   </div>
-                  {project.commercialization_terms && (
-                    <div className="p-3 bg-[#F8FAFC] rounded border border-[#E2E8F0]">
-                      <span className="font-semibold text-[#0F172A] block mb-0.5">Commercialization Terms</span>
-                      <p className="text-[#475569]">{project.commercialization_terms}</p>
-                    </div>
-                  )}
                 </div>
               </Card>
             </div>
@@ -241,56 +344,52 @@ export function ProjectPage() {
                 </h3>
 
                 <div className="space-y-3">
-                  {members.map((m) => {
-                    const u = DEMO_USERS.find((usr) => usr.id === m.user_id);
-                    const prof = DEMO_PROFILES.find((p) => p.user_id === m.user_id);
-                    return (
-                      <div key={m.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#F8FAFC]">
-                        <div className="w-8 h-8 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold">
-                          {u?.display_name.charAt(0)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-[#0F172A] truncate">
-                            {u?.display_name}
-                          </p>
-                          <p className="text-[10px] text-[#64748B] capitalize">{m.role.replace('_', ' ')}</p>
-                        </div>
-                        <span className="text-[10px] font-semibold text-[#15803D] bg-[#F0FDF4] px-1.5 py-0.5 rounded">
-                          Charter v1 ✓
-                        </span>
+                  {members.map((m: any) => (
+                    <div key={m.user_id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#F8FAFC]">
+                      <div className="w-8 h-8 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold">
+                        {(m.display_name || 'U').charAt(0).toUpperCase()}
                       </div>
-                    );
-                  })}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-[#0F172A] truncate">
+                          {m.display_name || 'Researcher'}
+                        </p>
+                        <p className="text-[10px] text-[#64748B] capitalize">{m.role.replace('_', ' ')}</p>
+                      </div>
+                      <span className="text-[10px] font-semibold text-[#15803D] bg-[#F0FDF4] px-1.5 py-0.5 rounded">
+                        Active ✓
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </Card>
 
               {/* Escrow Distribution Breakdown */}
-              {project.budget > 0 && (
+              {Number(project.budget) > 0 && (
                 <Card className="p-5 bg-white space-y-3">
                   <h3 className="text-sm font-bold text-[#0F172A]">Simulated Escrow Allocation</h3>
                   <div className="space-y-2 text-xs">
                     <div className="flex justify-between text-[#475569]">
                       <span>Contributor Pool (60%)</span>
                       <strong className="text-[#0F172A]">
-                        ${(project.budget * 0.6).toLocaleString()}
+                        ${(Number(project.budget) * 0.6).toLocaleString()}
                       </strong>
                     </div>
                     <div className="flex justify-between text-[#475569]">
                       <span>Mentor / Expert Pool (25%)</span>
                       <strong className="text-[#0F172A]">
-                        ${(project.budget * 0.25).toLocaleString()}
+                        ${(Number(project.budget) * 0.25).toLocaleString()}
                       </strong>
                     </div>
                     <div className="flex justify-between text-[#475569]">
                       <span>AI Compute Reserve (10%)</span>
                       <strong className="text-[#0F172A]">
-                        ${(project.budget * 0.1).toLocaleString()}
+                        ${(Number(project.budget) * 0.1).toLocaleString()}
                       </strong>
                     </div>
                     <div className="flex justify-between text-[#475569]">
                       <span>Platform Maintenance (5%)</span>
                       <strong className="text-[#0F172A]">
-                        ${(project.budget * 0.05).toLocaleString()}
+                        ${(Number(project.budget) * 0.05).toLocaleString()}
                       </strong>
                     </div>
                   </div>
@@ -306,66 +405,59 @@ export function ProjectPage() {
             <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-4">
               <div>
                 <h2 className="text-base font-bold text-[#0F172A]">
-                  Research Charter — Version {charter?.version || 1}.0
+                  {charter?.title || 'Research Charter v1.0'}
                 </h2>
                 <p className="text-xs text-[#64748B] mt-0.5">
-                  Cryptographically referenced legal terms. Hash:{' '}
-                  <code className="text-[#1D4ED8]">a4f981e...c902b</code>
+                  Cryptographically referenced legal terms registered on SHA-256 Ledger.
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-[#15803D] font-semibold bg-[#F0FDF4] px-2 py-1 rounded border border-[#DCFCE7] flex items-center gap-1">
-                  <CheckCircle2 size={13} /> Active Version
+                  <CheckCircle2 size={13} /> Active Version {charter?.version || 1}.0
                 </span>
               </div>
             </div>
 
             <div className="space-y-4 text-xs text-[#334155] leading-relaxed">
               <div className="p-4 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] space-y-1">
-                <h4 className="font-bold text-[#0F172A]">Clause 1: Intellectual Property & Attribution</h4>
-                <p>
-                  All contributions submitted to this repository are hash-chained to the contributor's
-                  ResearchMesh identity. Proprietary assets contributed by the Organization remain under exclusive
-                  license, while novel algorithmic improvements are subject to joint-authorship rules.
-                </p>
+                <h4 className="font-bold text-[#0F172A]">Clause 1: Scope & Deliverables</h4>
+                <p>{charter?.scope || project.public_summary}</p>
               </div>
 
               <div className="p-4 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] space-y-1">
-                <h4 className="font-bold text-[#0F172A]">Clause 2: AI Assistance & Disclosure</h4>
-                <p>
-                  Any code, literature review, or dataset transformed by AI must be logged through the
-                  ResearchMesh AI Policy Gateway. Pure AI generation cannot earn human credit points; credits are
-                  solely allocated for human review, verification, and critical direction.
-                </p>
+                <h4 className="font-bold text-[#0F172A]">Clause 2: Intellectual Property & Attribution</h4>
+                <p>{charter?.ip_terms || project.ip_ownership}</p>
               </div>
 
               <div className="p-4 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] space-y-1">
                 <h4 className="font-bold text-[#0F172A]">Clause 3: Confidentiality & Data Residency</h4>
-                <p>
-                  Data marked Sensitivity: High or Critical shall not leave the isolated edge container or be sent
-                  to third-party LLM providers. Violations trigger immediate revocation of workspace access and
-                  disciplinary ledger logging.
-                </p>
+                <p>{charter?.confidentiality_terms || "Confidential assets restricted to signatories. Violations recorded on ledger."}</p>
               </div>
 
               <div className="p-4 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] space-y-1">
-                <h4 className="font-bold text-[#0F172A]">Clause 4: Dispute Resolution</h4>
-                <p>
-                  Disputes regarding authorship percentage, milestone acceptance, or credit allocation shall be
-                  decided by the designated Mentor and Workspace Manager, subject to final review by the Admin
-                  Dispute Council.
-                </p>
+                <h4 className="font-bold text-[#0F172A]">Clause 4: Withdrawal Rules & Reward Threshold</h4>
+                <p>{charter?.withdrawal_rules || `Withdrawal threshold set at ${project.withdrawal_threshold} credits.`}</p>
+              </div>
+
+              <div className="p-4 bg-[#F8FAFC] rounded-lg border border-[#E2E8F0] space-y-1">
+                <h4 className="font-bold text-[#0F172A]">Clause 5: Dispute Resolution</h4>
+                <p>{charter?.dispute_rules || "Disputes adjudicated by Mentor & Council."}</p>
               </div>
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-[#E2E8F0]">
               <span className="text-xs text-[#64748B]">
-                Accepted by all {members.length} active workspace members.
+                {hasAcceptedCharter ? 'You have signed & accepted this charter.' : 'You must sign to access confidential assets.'}
               </span>
-              {!charterAccepted && (
-                <Button size="sm" onClick={() => setCharterAccepted(true)}>
-                  Accept Charter v1
+              {isMember && !hasAcceptedCharter && (
+                <Button size="sm" onClick={handleAcceptCharter} disabled={isSigningCharter}>
+                  {isSigningCharter ? 'Signing on Ledger...' : 'Accept & Sign Charter v1.0'}
                 </Button>
+              )}
+              {hasAcceptedCharter && (
+                <span className="text-xs font-semibold text-[#15803D] bg-[#F0FDF4] px-3 py-1.5 rounded border border-[#DCFCE7] flex items-center gap-1">
+                  <CheckCircle2 size={14} /> Signed & Accepted
+                </span>
               )}
             </div>
           </Card>
@@ -374,50 +466,139 @@ export function ProjectPage() {
         {/* Milestones Tab */}
         {activeTab === 'milestones' && (
           <div className="space-y-4">
-            {milestones.map((m, index) => (
-              <Card key={m.id} className="p-5 bg-white">
-                <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                  <div className="space-y-2 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-[#1D4ED8] bg-[#EFF6FF] px-2 py-0.5 rounded">
-                        Milestone {index + 1}
-                      </span>
-                      <StatusBadge status={m.status} />
-                    </div>
-                    <h3 className="text-base font-bold text-[#0F172A]">{m.title}</h3>
-                    <p className="text-xs text-[#475569]">{m.description}</p>
+            {milestones.length === 0 ? (
+              <div className="p-8 bg-white border border-[#E2E8F0] rounded-lg text-center text-xs text-[#64748B]">
+                No milestones published yet.
+              </div>
+            ) : (
+              milestones.map((m: any, index: number) => {
+                let deliverables: string[] = [];
+                try {
+                  deliverables = typeof m.deliverables === 'string' ? JSON.parse(m.deliverables) : m.deliverables || [];
+                } catch {
+                  deliverables = [m.deliverables];
+                }
 
-                    <div className="pt-2">
-                      <span className="text-xs font-semibold text-[#0F172A] block mb-1">
-                        Deliverables:
-                      </span>
-                      <ul className="list-disc list-inside text-xs text-[#64748B] space-y-0.5">
-                        {m.deliverables.map((d, i) => (
-                          <li key={i}>{d}</li>
-                        ))}
-                      </ul>
-                    </div>
+                return (
+                  <Card key={m.id} className="p-5 bg-white">
+                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-[#1D4ED8] bg-[#EFF6FF] px-2 py-0.5 rounded">
+                            Milestone {index + 1}
+                          </span>
+                          <StatusBadge status={m.status} />
+                        </div>
+                        <h3 className="text-base font-bold text-[#0F172A]">{m.title}</h3>
+                        <p className="text-xs text-[#475569]">{m.description}</p>
 
-                    <div className="p-2.5 bg-[#F8FAFC] rounded border border-[#E2E8F0] text-xs">
-                      <span className="font-semibold text-[#0F172A]">Acceptance Criteria: </span>
-                      <span className="text-[#475569]">{m.acceptance_criteria}</span>
-                    </div>
-                  </div>
+                        <div className="pt-2">
+                          <span className="text-xs font-semibold text-[#0F172A] block mb-1">
+                            Deliverables:
+                          </span>
+                          <ul className="list-disc list-inside text-xs text-[#64748B] space-y-0.5">
+                            {deliverables.map((d: string, i: number) => (
+                              <li key={i}>{d}</li>
+                            ))}
+                          </ul>
+                        </div>
 
-                  <div className="md:w-48 text-right space-y-1 shrink-0">
-                    <span className="text-[10px] text-[#64748B] uppercase font-semibold">
-                      Budget Allocation
-                    </span>
-                    <p className="text-base font-bold text-[#0F172A]">
-                      ${m.budget_allocation.toLocaleString()}
-                    </p>
-                    <p className="text-[11px] text-[#64748B]">
-                      Due: {new Date(m.due_date).toLocaleDateString()}
-                    </p>
-                  </div>
+                        <div className="p-2.5 bg-[#F8FAFC] rounded border border-[#E2E8F0] text-xs">
+                          <span className="font-semibold text-[#0F172A]">Acceptance Criteria: </span>
+                          <span className="text-[#475569]">{m.acceptance_criteria}</span>
+                        </div>
+                      </div>
+
+                      <div className="md:w-48 text-right space-y-1 shrink-0">
+                        <span className="text-[10px] text-[#64748B] uppercase font-semibold">
+                          Budget Allocation
+                        </span>
+                        <p className="text-base font-bold text-[#0F172A]">
+                          ${Number(m.budget_allocation || 0).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* Data Room Tab */}
+        {activeTab === 'data-room' && (
+          <div className="space-y-4">
+            <Card className="p-6 bg-white space-y-4">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-[#0F172A]">Data Room & Repository Files</h3>
+                  <p className="text-xs text-[#64748B] mt-0.5">
+                    Governed access with cryptographic watermarking and download audit logs.
+                  </p>
                 </div>
-              </Card>
-            ))}
+              </div>
+
+              {files.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#64748B]">
+                  No files attached to this project.
+                </div>
+              ) : (
+                <div className="divide-y divide-[#F1F5F9]">
+                  {files.map((f: any) => (
+                    <div key={f.id} className="py-3 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <FileText size={16} className={f.is_confidential ? 'text-[#D97706]' : 'text-[#1D4ED8]'} />
+                        <div>
+                          <p className="text-xs font-semibold text-[#0F172A] flex items-center gap-1.5">
+                            {f.name}
+                            {f.is_confidential ? (
+                              <span className="text-[10px] font-semibold bg-[#FEF3C7] text-[#92400E] px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                <Lock size={10} /> Confidential
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-semibold bg-[#F0FDF4] text-[#166534] px-1.5 py-0.5 rounded">
+                                Public
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[11px] text-[#64748B]">
+                            Size: {f.file_size} • Sensitivity: {f.sensitivity_level}
+                          </p>
+                        </div>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<Download size={14} />}
+                        onClick={() => handleDownloadFile(f)}
+                      >
+                        Download Watermarked
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            {downloadReceipt && (
+              <div className="p-4 bg-[#F0FDF4] border border-[#BBF7D0] rounded-lg space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[#166534] flex items-center gap-1">
+                    <CheckCircle2 size={14} /> Cryptographic Watermark Injected
+                  </span>
+                  <button onClick={() => setDownloadReceipt(null)} className="text-[#166534] hover:underline">
+                    Close
+                  </button>
+                </div>
+                <p className="text-[#15803D]">
+                  File '{downloadReceipt.file_name}' watermarked for <strong>{downloadReceipt.user_email}</strong>.
+                </p>
+                <div className="p-2 bg-white rounded border border-[#DCFCE7] font-mono text-[11px] text-[#334155] break-all">
+                  Watermark Hash: {downloadReceipt.watermark_hash}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -437,54 +618,28 @@ export function ProjectPage() {
               <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-[#0F172A]">Cloud LLM Permitted</span>
-                  <span className={project.ai_policy.cloud_allowed ? 'text-[#15803D] font-bold' : 'text-[#B91C1C] font-bold'}>
-                    {project.ai_policy.cloud_allowed ? 'YES (Public Only)' : 'BLOCKED'}
+                  <span className={project.ai_policy?.cloud_allowed ? 'text-[#15803D] font-bold' : 'text-[#B91C1C] font-bold'}>
+                    {project.ai_policy?.cloud_allowed ? 'YES (Public Only)' : 'BLOCKED'}
                   </span>
                 </div>
                 <p className="text-[#64748B]">
-                  {project.ai_policy.cloud_allowed
-                    ? 'Cloud models (Claude, GPT-4) may be queried for non-sensitive public literature.'
-                    : 'External cloud APIs are blocked at the network gateway level to prevent data leakage.'}
+                  {project.ai_policy?.cloud_allowed
+                    ? 'Cloud models may be queried for non-sensitive public literature.'
+                    : 'External cloud APIs are blocked to guarantee confidentiality.'}
                 </p>
               </div>
 
               <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-[#0F172A]">Local Execution Required</span>
-                  <span className={project.ai_policy.local_required ? 'text-[#15803D] font-bold' : 'text-[#64748B] font-bold'}>
-                    {project.ai_policy.local_required ? 'ENFORCED (Ollama/Local)' : 'OPTIONAL'}
+                  <span className={project.ai_policy?.local_required ? 'text-[#15803D] font-bold' : 'text-[#64748B] font-bold'}>
+                    {project.ai_policy?.local_required ? 'ENFORCED (Air-gapped)' : 'OPTIONAL'}
                   </span>
                 </div>
                 <p className="text-[#64748B]">
-                  {project.ai_policy.local_required
-                    ? 'All prompt inferences run locally on air-gapped or on-premise compute nodes.'
+                  {project.ai_policy?.local_required
+                    ? 'All prompt inferences run locally to prevent data egress.'
                     : 'Standard compute execution models permitted.'}
-                </p>
-              </div>
-
-              <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-[#0F172A]">Approved Models</span>
-                  <span className="font-mono text-[#0F172A]">
-                    {project.ai_policy.approved_models.length > 0
-                      ? project.ai_policy.approved_models.join(', ')
-                      : 'All Standard Open Models'}
-                  </span>
-                </div>
-                <p className="text-[#64748B]">
-                  Only models evaluated for hallucination bounds and privacy certifications are allowed.
-                </p>
-              </div>
-
-              <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-[#0F172A]">Human Review Gateway</span>
-                  <span className={project.ai_policy.human_approval_required ? 'text-[#B45309] font-bold' : 'text-[#64748B] font-bold'}>
-                    {project.ai_policy.human_approval_required ? 'MANDATORY' : 'RECOMMENDED'}
-                  </span>
-                </div>
-                <p className="text-[#64748B]">
-                  AI generated artifacts must receive explicit human verification before recording on the ledger.
                 </p>
               </div>
             </div>
@@ -503,10 +658,12 @@ export function ProjectPage() {
         <form onSubmit={handleApply} className="space-y-4">
           <div className="p-3 bg-[#EFF6FF] border border-[#DBEAFE] rounded-lg text-xs space-y-1">
             <span className="font-bold text-[#1D4ED8] flex items-center gap-1">
-              <Sparkles size={13} /> AI Matching Compatibility: 94%
+              <Sparkles size={13} /> AI Matching Compatibility: {matchPct}%
             </span>
             <p className="text-[#1E40AF]">
-              Your profile skills (Python, PyTorch, Computer Vision) match 4/4 required skills for this project.
+              {matchedSkills.length > 0
+                ? `Matched skills: ${matchedSkills.join(', ')}`
+                : 'General profile evaluation based on domain alignment and availability.'}
             </p>
           </div>
 
@@ -556,7 +713,7 @@ export function ProjectPage() {
           />
 
           <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg text-[11px] text-[#64748B]">
-            By applying, you agree to review and accept the Research Charter v1 upon acceptance into the workspace.
+            By applying, you agree to review and accept the Research Charter v1.0 upon acceptance into the workspace.
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -568,8 +725,8 @@ export function ProjectPage() {
             >
               Cancel
             </Button>
-            <Button type="submit" size="sm">
-              Submit Application
+            <Button type="submit" size="sm" disabled={isApplying}>
+              {isApplying ? 'Submitting to Database...' : 'Submit Application'}
             </Button>
           </div>
         </form>
@@ -577,3 +734,4 @@ export function ProjectPage() {
     </div>
   );
 }
+

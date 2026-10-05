@@ -46,6 +46,10 @@ export interface Profile {
   id: string;
   user_id: string;
   role: UserRole;
+  display_name?: string;
+  email?: string;
+  verified?: boolean;
+  contact_email?: string;
   skills: string[];
   interests: string[];
   education?: string;
@@ -58,6 +62,7 @@ export interface Profile {
   org_description?: string;
   availability?: string;
   portfolio_links?: string[];
+  portfolio_url?: string;
   bio?: string;
 }
 

@@ -6,32 +6,11 @@ import httpx
 from backend.config import settings
 from backend.schemas import AIPromptRequest, AIPromptResponse, AILogItem
 
+from backend.database import get_db
+
 class AIGatewayService:
     def __init__(self):
-        self.logs: List[AILogItem] = [
-            AILogItem(
-                id="log-init-1",
-                agent_type="developer",
-                project_id="proj-1",
-                request="Analyze NovaScan v3 CLAHE normalization parameters",
-                response="Normalizes fundus images to 512x512 with green-channel CLAHE. Recommend INT8 quantization.",
-                model="llama3-8b-instruct",
-                data_sensitivity="high",
-                approval_status="approved",
-                created_at="2026-09-28T16:00:00Z",
-            ),
-            AILogItem(
-                id="log-init-2",
-                agent_type="reviewer",
-                project_id="proj-1",
-                request="Check FDA Class II sensitivity bar requirements",
-                response="Requires >90% sensitivity and >85% specificity on 5,000 holdout retinal images.",
-                model="llama3-8b-instruct",
-                data_sensitivity="high",
-                approval_status="approved",
-                created_at="2026-10-02T11:20:00Z",
-            ),
-        ]
+        self.logs: List[AILogItem] = []
 
     def _hash_text(self, text: str) -> str:
         return hashlib.sha256(text.encode('utf-8')).hexdigest()
@@ -88,7 +67,25 @@ class AIGatewayService:
 
         r_hash = self._hash_text(response_text)
 
-        # 2. RECORD AUDIT LOG
+        # 2. RECORD AUDIT LOG TO DATABASE
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO ai_activity_logs (
+                id, project_id, human_owner_id, agent_type, request, response,
+                model, data_sensitivity, approval_status, prompt_hash, response_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                audit_id, req.project_id, req.human_owner_id or "anonymous", req.agent_type,
+                req.prompt, response_text[:200] + "...", model_used, req.project_sensitivity,
+                "pending" if requires_approval else "approved", p_hash, r_hash, now_ts
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error persisting AI log to database: {e}")
+
         log_entry = AILogItem(
             id=audit_id,
             agent_type=req.agent_type,
@@ -115,8 +112,31 @@ class AIGatewayService:
         )
 
     def get_logs(self, project_id: Optional[str] = None) -> List[AILogItem]:
-        if project_id:
-            return [l for l in self.logs if l.project_id == project_id]
-        return self.logs
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+            if project_id:
+                cursor.execute("SELECT * FROM ai_activity_logs WHERE project_id = ? ORDER BY created_at DESC", (project_id,))
+            else:
+                cursor.execute("SELECT * FROM ai_activity_logs ORDER BY created_at DESC")
+            rows = cursor.fetchall()
+            conn.close()
+            db_logs = [
+                AILogItem(
+                    id=r["id"],
+                    agent_type=r["agent_type"],
+                    project_id=r["project_id"] or "",
+                    request=r["request"],
+                    response=r["response"],
+                    model=r["model"],
+                    data_sensitivity=r["data_sensitivity"],
+                    approval_status=r["approval_status"],
+                    created_at=r["created_at"],
+                )
+                for r in rows
+            ]
+            return db_logs
+        except Exception as e:
+            return self.logs
 
 ai_gateway_service = AIGatewayService()

@@ -1,193 +1,351 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { DEMO_USERS, DEMO_PROFILES, getUserCredits } from '../lib/demo-data';
+import { authRegister, authLogin, authProfile, syncUserProfile } from '../lib/api';
 import type { User, Profile, UserRole } from '../types';
 
 interface AuthState {
   user: User | null;
   profile: Profile | null;
   loading: boolean;
-  isDemo: boolean;
   totalCredits: number;
 }
 
 interface AuthContextType extends AuthState {
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, role: UserRole, displayName: string) => Promise<void>;
   signOut: () => Promise<void>;
-  demoLogin: (role: UserRole) => void;
-  setProfile: (profile: Profile) => void;
-  updateUser: (updates: Partial<User>) => void;
+  refreshProfile: () => Promise<void>;
+  updateProfile: (updates: Partial<Profile>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEMO_ROLE_USER_MAP: Record<UserRole, string> = {
-  student: 'user-student-1',
-  organization: 'user-org-1',
-  mentor: 'user-mentor-1',
-  admin: 'user-admin-1',
-};
+const LOCAL_SESSION_KEY = 'researchmesh_auth_session';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AuthState>({
-    user: null,
-    profile: null,
-    loading: true,
-    isDemo: false,
-    totalCredits: 0,
-  });
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [totalCredits, setTotalCredits] = useState(0);
 
-  // Check for existing session on mount
-  useEffect(() => {
-    const checkSession = async () => {
-      // Check localStorage for demo session
-      const demoUserId = localStorage.getItem('researchmesh_demo_user');
-      if (demoUserId) {
-        const user = DEMO_USERS.find(u => u.id === demoUserId);
-        const profile = DEMO_PROFILES.find(p => p.user_id === demoUserId);
-        if (user) {
-          setState({
-            user,
-            profile: profile || null,
-            loading: false,
-            isDemo: true,
-            totalCredits: getUserCredits(demoUserId),
-          });
-          return;
-        }
+  // Fetch verified credits sum for the user from Supabase
+  const fetchCreditsSupabase = async (userId: string) => {
+    if (!supabase) return 0;
+    try {
+      const { data, error } = await supabase
+        .from('credits')
+        .select('amount')
+        .eq('user_id', userId);
+      if (error || !data) return 0;
+      return data.reduce((sum: number, c: { amount: number }) => sum + c.amount, 0);
+    } catch {
+      return 0;
+    }
+  };
+
+  // Fetch profile for an authenticated user ID from Supabase
+  const fetchUserProfileSupabase = async (userId: string) => {
+    if (!supabase) return null;
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error fetching profile:', error);
       }
+      return data as Profile | null;
+    } catch (err) {
+      console.error('Failed to fetch user profile:', err);
+      return null;
+    }
+  };
 
-      // Check Supabase session
-      if (isSupabaseConfigured() && supabase) {
-        const { data: { session } } = await supabase.auth.getSession();
+  // Initialize session on mount and listen to auth changes
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (isSupabaseConfigured() && supabase) {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            const profileData = await fetchUserProfileSupabase(session.user.id);
+            const creditsSum = await fetchCreditsSupabase(session.user.id);
+
+            const appUser: User = {
+              id: session.user.id,
+              email: session.user.email || '',
+              role: profileData?.role || (session.user.user_metadata?.role as UserRole) || 'student',
+              display_name: profileData?.display_name || session.user.user_metadata?.display_name || session.user.email?.split('@')[0] || 'User',
+              verified: profileData?.verified || false,
+              created_at: session.user.created_at,
+            };
+
+            setUser(appUser);
+            setProfile(profileData);
+            setTotalCredits(creditsSum);
+          } else {
+            setUser(null);
+            setProfile(null);
+            setTotalCredits(0);
+          }
+        } else {
+          // Local/Backend mode: restore session from persistent storage
+          const stored = localStorage.getItem(LOCAL_SESSION_KEY);
+          if (stored) {
+            try {
+              const sessionUser = JSON.parse(stored);
+              const data = await authProfile(sessionUser.id);
+              if (data && data.user) {
+                setUser(data.user);
+                setProfile(data.profile);
+                setTotalCredits(data.total_credits || 0);
+              }
+            } catch (e) {
+              console.warn('Failed to restore local session:', e);
+              localStorage.removeItem(LOCAL_SESSION_KEY);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Auth initialization error:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initAuth();
+
+    // Listen for auth state changes if Supabase is active
+    if (isSupabaseConfigured() && supabase) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
         if (session?.user) {
-          // Fetch profile from Supabase
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('user_id', session.user.id)
-            .single();
+          const profileData = await fetchUserProfileSupabase(session.user.id);
+          const creditsSum = await fetchCreditsSupabase(session.user.id);
 
-          const user: User = {
+          const appUser: User = {
             id: session.user.id,
             email: session.user.email || '',
-            role: profileData?.role || 'student',
-            display_name: profileData?.display_name || session.user.email?.split('@')[0] || '',
-            verified: false,
+            role: profileData?.role || (session.user.user_metadata?.role as UserRole) || 'student',
+            display_name: profileData?.display_name || session.user.user_metadata?.display_name || session.user.email?.split('@')[0] || 'User',
+            verified: profileData?.verified || false,
             created_at: session.user.created_at,
           };
 
-          setState({
-            user,
-            profile: profileData,
-            loading: false,
-            isDemo: false,
-            totalCredits: 0,
-          });
-          return;
+          setUser(appUser);
+          setProfile(profileData);
+          setTotalCredits(creditsSum);
+        } else {
+          setUser(null);
+          setProfile(null);
+          setTotalCredits(0);
         }
-      }
+        setLoading(false);
+      });
 
-      setState(prev => ({ ...prev, loading: false }));
-    };
-
-    checkSession();
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    if (!isSupabaseConfigured() || !supabase) {
-      // Fall back to demo mode
-      const user = DEMO_USERS.find(u => u.email === email);
-      if (user) {
-        const profile = DEMO_PROFILES.find(p => p.user_id === user.id);
-        localStorage.setItem('researchmesh_demo_user', user.id);
-        setState({
-          user,
-          profile: profile || null,
-          loading: false,
-          isDemo: true,
-          totalCredits: getUserCredits(user.id),
-        });
-        return;
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
+      if (data.user) {
+        const profileData = await fetchUserProfileSupabase(data.user.id);
+        const creditsSum = await fetchCreditsSupabase(data.user.id);
+
+        const appUser: User = {
+          id: data.user.id,
+          email: data.user.email || '',
+          role: profileData?.role || (data.user.user_metadata?.role as UserRole) || 'student',
+          display_name: profileData?.display_name || data.user.user_metadata?.display_name || data.user.email?.split('@')[0] || 'User',
+          verified: profileData?.verified || false,
+          created_at: data.user.created_at,
+        };
+
+        setUser(appUser);
+        setProfile(profileData);
+        setTotalCredits(creditsSum);
+
+        // Sync with backend SQLite
+        syncUserProfile(data.user.id, {
+          email: data.user.email,
+          role: appUser.role,
+          display_name: appUser.display_name,
+        }).catch(() => {});
       }
-      throw new Error('Invalid credentials');
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-
-    if (data.user) {
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('user_id', data.user.id)
-        .single();
-
-      const user: User = {
-        id: data.user.id,
-        email: data.user.email || '',
-        role: profileData?.role || 'student',
-        display_name: profileData?.display_name || data.user.email?.split('@')[0] || '',
-        verified: false,
-        created_at: data.user.created_at,
-      };
-
-      setState({
-        user,
-        profile: profileData,
-        loading: false,
-        isDemo: false,
-        totalCredits: 0,
-      });
+    } else {
+      // Backend direct authentication
+      const res = await authLogin({ email, password });
+      setUser(res.user);
+      setProfile(res.profile);
+      setTotalCredits(res.total_credits || 0);
+      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(res.user));
     }
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string) => {
-    if (!isSupabaseConfigured() || !supabase) {
-      throw new Error('Supabase not configured. Use demo mode.');
+  const signUp = useCallback(async (email: string, password: string, role: UserRole, displayName: string) => {
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role,
+            display_name: displayName,
+          },
+        },
+      });
+
+      if (error) throw error;
+
+      if (data.user) {
+        // Create or ensure profile row in public.profiles
+        const { data: insertedProfile, error: profileErr } = await supabase
+          .from('profiles')
+          .upsert({
+            id: data.user.id,
+            email: data.user.email,
+            role,
+            display_name: displayName,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (profileErr) {
+          console.warn('Profile upsert note:', profileErr.message);
+        }
+
+        const appUser: User = {
+          id: data.user.id,
+          email: data.user.email || '',
+          role,
+          display_name: displayName,
+          verified: false,
+          created_at: data.user.created_at,
+        };
+
+        setUser(appUser);
+        setProfile(insertedProfile || null);
+        setTotalCredits(0);
+
+        // Sync with backend SQLite
+        syncUserProfile(data.user.id, {
+          email: data.user.email,
+          role,
+          display_name: displayName,
+        }).catch(() => {});
+      }
+    } else {
+      // Backend direct registration
+      const res = await authRegister({
+        email,
+        password,
+        role,
+        display_name: displayName,
+      });
+
+      setUser(res.user);
+      setProfile(res.profile);
+      setTotalCredits(0);
+      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(res.user));
     }
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
   }, []);
 
   const signOut = useCallback(async () => {
-    localStorage.removeItem('researchmesh_demo_user');
     if (isSupabaseConfigured() && supabase) {
       await supabase.auth.signOut();
     }
-    setState({ user: null, profile: null, loading: false, isDemo: false, totalCredits: 0 });
+    localStorage.removeItem(LOCAL_SESSION_KEY);
+    setUser(null);
+    setProfile(null);
+    setTotalCredits(0);
   }, []);
 
-  const demoLogin = useCallback((role: UserRole) => {
-    const userId = DEMO_ROLE_USER_MAP[role];
-    const user = DEMO_USERS.find(u => u.id === userId);
-    const profile = DEMO_PROFILES.find(p => p.user_id === userId);
-    if (user) {
-      localStorage.setItem('researchmesh_demo_user', user.id);
-      setState({
-        user,
-        profile: profile || null,
-        loading: false,
-        isDemo: true,
-        totalCredits: getUserCredits(userId),
-      });
+  const refreshProfile = useCallback(async () => {
+    if (!user) return;
+    if (isSupabaseConfigured() && supabase) {
+      const profileData = await fetchUserProfileSupabase(user.id);
+      const creditsSum = await fetchCreditsSupabase(user.id);
+      if (profileData) {
+        setProfile(profileData);
+        setUser(prev => prev ? {
+          ...prev,
+          role: profileData.role || prev.role,
+          display_name: profileData.display_name || prev.display_name,
+          verified: profileData.verified !== undefined ? Boolean(profileData.verified) : prev.verified,
+        } : null);
+      }
+      setTotalCredits(creditsSum);
+    } else {
+      try {
+        const res = await authProfile(user.id);
+        if (res && res.user) {
+          setUser(res.user);
+          setProfile(res.profile);
+          setTotalCredits(res.total_credits || 0);
+        }
+      } catch (err) {
+        console.error('Failed to refresh profile:', err);
+      }
     }
-  }, []);
+  }, [user]);
 
-  const setProfile = useCallback((profile: Profile) => {
-    setState(prev => ({ ...prev, profile }));
-  }, []);
+  const updateProfile = useCallback(async (updates: Partial<Profile>) => {
+    if (!user) return;
+    if (isSupabaseConfigured() && supabase) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', user.id)
+        .select()
+        .single();
 
-  const updateUser = useCallback((updates: Partial<User>) => {
-    setState(prev => ({
-      ...prev,
-      user: prev.user ? { ...prev.user, ...updates } : null,
-    }));
-  }, []);
+      if (error) throw error;
+      if (data) {
+        setProfile(data as Profile);
+        setUser(prev => prev ? {
+          ...prev,
+          display_name: data.display_name || prev.display_name,
+          role: data.role || prev.role,
+          verified: data.verified !== undefined ? data.verified : prev.verified,
+        } : null);
+      }
+    }
+
+    // Always update FastAPI SQLite backend
+    try {
+      await syncUserProfile(user.id, updates);
+      await refreshProfile();
+    } catch (e) {
+      console.warn('Sync profile error:', e);
+    }
+  }, [user, refreshProfile]);
 
   return (
-    <AuthContext.Provider value={{ ...state, signIn, signUp, signOut, demoLogin, setProfile, updateUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        loading,
+        totalCredits,
+        signIn,
+        signUp,
+        signOut,
+        refreshProfile,
+        updateProfile,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -196,7 +354,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
+    throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 }

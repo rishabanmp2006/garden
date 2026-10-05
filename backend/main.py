@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
-from backend.routers import ledger, ai, watermark, matching, projects
+from backend.routers import ledger, ai, watermark, matching, projects, auth
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,6 +21,7 @@ app.add_middleware(
 )
 
 # Include Routers
+app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(ledger.router, prefix=settings.API_PREFIX)
 app.include_router(ai.router, prefix=settings.API_PREFIX)
 app.include_router(watermark.router, prefix=settings.API_PREFIX)

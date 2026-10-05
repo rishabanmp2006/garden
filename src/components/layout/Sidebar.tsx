@@ -70,7 +70,7 @@ function getNavItems(role: UserRole): NavItemDef[] {
 }
 
 export function Sidebar() {
-  const { user, isDemo, signOut, totalCredits } = useAuth();
+  const { user, signOut, totalCredits } = useAuth();
   const navigate = useNavigate();
 
   if (!user) return null;
@@ -93,9 +93,6 @@ export function Sidebar() {
           </div>
           <div>
             <span className="text-sm font-bold text-[#0F172A] tracking-tight">ResearchMesh</span>
-            {isDemo && (
-              <span className="block text-[10px] font-medium text-[#B45309] leading-none mt-0.5">DEMO MODE</span>
-            )}
           </div>
         </NavLink>
       </div>

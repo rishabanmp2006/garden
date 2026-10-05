@@ -5,6 +5,7 @@ import { AppShell } from './components/layout/AppShell';
 // Pages
 import { Landing } from './pages/Landing';
 import { Auth } from './pages/Auth';
+import { Onboarding } from './pages/Onboarding';
 import { DashboardPage } from './pages/dashboard/DashboardPage';
 import { ExploreProjects } from './pages/projects/ExploreProjects';
 import { ProjectPage } from './pages/projects/ProjectPage';
@@ -26,23 +27,22 @@ import { AdminAuditPage } from './pages/admin/AdminAuditPage';
 import { AdminSecurityPage } from './pages/admin/AdminSecurityPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, demoLogin } = useAuth();
+  const { user, loading } = useAuth();
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]">
         <div className="text-center space-y-2">
           <div className="w-6 h-6 border-2 border-[#1D4ED8] border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-xs text-[#64748B]">Loading ResearchMesh...</p>
+          <p className="text-xs text-[#64748B]">Verifying authenticated session...</p>
         </div>
       </div>
     );
   }
 
-  // If not logged in, auto-login as demo student so judges/testers aren't blocked
+  // Redirect to real login page if unauthenticated
   if (!user) {
-    demoLogin('student');
-    return null;
+    return <Navigate to="/auth" replace />;
   }
 
   return <>{children}</>;
@@ -56,6 +56,16 @@ export default function App() {
           {/* Public Routes */}
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
+
+          {/* Authenticated Onboarding */}
+          <Route
+            path="/onboarding"
+            element={
+              <ProtectedRoute>
+                <Onboarding />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Authenticated Application Shell */}
           <Route

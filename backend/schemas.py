@@ -53,9 +53,11 @@ class LedgerBlock(BaseModel):
 class LedgerVerifyResponse(BaseModel):
     is_valid: bool
     total_blocks_verified: int
+    total_entries: Optional[int] = None
     genesis_hash: str
     terminal_hash: str
     broken_block_id: Optional[int] = None
+    corrupted_entry: Optional[Dict[str, Any]] = None
     message: str
 
 class TamperBlockRequest(BaseModel):
