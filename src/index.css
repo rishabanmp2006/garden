@@ -1,0 +1,369 @@
+@import "tailwindcss";
+
+/* ============================================================
+   ResearchMesh Design System
+   Professional research/enterprise SaaS aesthetic
+   ============================================================ */
+
+@theme {
+  /* Color Palette */
+  --color-navy: #0F172A;
+  --color-navy-light: #1E293B;
+  --color-slate-700: #334155;
+  --color-slate-600: #475569;
+  --color-slate-500: #64748B;
+  --color-slate-400: #94A3B8;
+  --color-slate-300: #CBD5E1;
+  --color-slate-200: #E2E8F0;
+  --color-slate-100: #F1F5F9;
+  --color-slate-50: #F8FAFC;
+
+  --color-primary: #1D4ED8;
+  --color-primary-dark: #1E40AF;
+  --color-primary-light: #3B82F6;
+  --color-primary-50: #EFF6FF;
+  --color-primary-100: #DBEAFE;
+
+  --color-success: #15803D;
+  --color-success-light: #22C55E;
+  --color-success-50: #F0FDF4;
+  --color-success-100: #DCFCE7;
+
+  --color-warning: #B45309;
+  --color-warning-light: #F59E0B;
+  --color-warning-50: #FFFBEB;
+  --color-warning-100: #FEF3C7;
+
+  --color-danger: #B91C1C;
+  --color-danger-light: #EF4444;
+  --color-danger-50: #FEF2F2;
+  --color-danger-100: #FEE2E2;
+
+  --color-surface: #FFFFFF;
+  --color-background: #F8FAFC;
+  --color-border: #E2E8F0;
+  --color-border-strong: #CBD5E1;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Spacing (8px system) */
+  --spacing-0: 0px;
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Shadows — restrained */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.04);
+}
+
+/* ============================================================
+   Base Styles
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-background);
+  color: var(--color-navy);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   Scrollbar
+   ============================================================ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-slate-300);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-slate-400);
+}
+
+/* ============================================================
+   Focus styles
+   ============================================================ */
+
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Component Utilities
+   ============================================================ */
+
+/* Status badge variants */
+.badge-verified {
+  background-color: var(--color-success-50);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-100);
+}
+
+.badge-pending {
+  background-color: var(--color-warning-50);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning-100);
+}
+
+.badge-danger {
+  background-color: var(--color-danger-50);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-100);
+}
+
+.badge-info {
+  background-color: var(--color-primary-50);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary-100);
+}
+
+.badge-neutral {
+  background-color: var(--color-slate-100);
+  color: var(--color-slate-600);
+  border: 1px solid var(--color-slate-200);
+}
+
+.badge-confidential {
+  background-color: #FEF2F2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+}
+
+/* Engagement model badges */
+.badge-funded {
+  background-color: var(--color-success-50);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-100);
+}
+
+.badge-knowledge {
+  background-color: var(--color-primary-50);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary-100);
+}
+
+/* Transition defaults */
+.transition-default {
+  transition: all 150ms ease;
+}
+
+/* Card hover for interactive cards */
+.card-interactive {
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.card-interactive:hover {
+  border-color: var(--color-slate-300);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Sidebar nav item */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-slate-600);
+  transition: all 120ms ease;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background-color: var(--color-slate-100);
+  color: var(--color-navy);
+}
+
+.nav-item.active {
+  background-color: var(--color-primary-50);
+  color: var(--color-primary);
+}
+
+.nav-item .icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+/* Section dividers */
+.nav-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-slate-400);
+  padding: 16px 12px 6px;
+}
+
+/* Table styles */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-slate-500);
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-slate-50);
+}
+
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-navy);
+}
+
+.data-table tr:hover td {
+  background-color: var(--color-slate-50);
+}
+
+/* Stat card */
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-navy);
+}
+
+.stat-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-slate-500);
+  margin-top: 4px;
+}
+
+/* Activity feed */
+.activity-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+/* Form elements */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="url"],
+textarea,
+select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: var(--font-sans);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-navy);
+  transition: border-color 150ms ease;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.1);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-slate-400);
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-slate-700);
+  margin-bottom: 4px;
+}
+
+/* Animations — restrained */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 200ms ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in {
+  animation: slideIn 200ms ease-out;
+}
+
+/* Loading spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-slate-200);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 600ms linear infinite;
+}
+
+/* Page transitions */
+.page-enter {
+  animation: fadeIn 250ms ease-out;
+}
