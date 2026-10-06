@@ -9,6 +9,7 @@ import { Input, Textarea, Select } from '../../components/ui/Input';
 import { SensitivityBadge, EngagementBadge } from '../../components/ui/Badge';
 import { useAuth } from '../../contexts/AuthContext';
 import { createProjectApi } from '../../lib/api';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import type { SensitivityLevel, EngagementModel } from '../../types';
 
 export function CreateProjectPage() {
@@ -91,35 +92,184 @@ export function CreateProjectPage() {
     setIsSubmitting(true);
     setErrorMsg(null);
 
+    const projectTitle = title.trim() || 'Low-cost Diabetic Retinopathy Detection on Edge Devices';
+    const cleanPublicSummary = publicSummary.trim() || 'A privacy-preserving machine learning pipeline evaluated against clinical standards on edge devices.';
+    const cleanConfidentialBrief = confidentialBrief.trim() || 'Internal training weights, annotated clinical patient identifiers, and preliminary edge runtime configurations.';
+    const budgetVal = Number(budget) || 100000;
+    const withdrawalVal = Number(withdrawalThreshold) || 50;
+    const durationVal = Number(durationDays) || 120;
+    const aiPolicyPayload = {
+      cloud_allowed: cloudAllowed,
+      local_required: localRequired,
+      approved_models: approvedModels.split(',').map((m) => m.trim()).filter(Boolean),
+      human_approval_required: humanApprovalRequired,
+    };
+    const rewardStructurePayload = {
+      contributor_percent: 60,
+      expert_percent: 25,
+      ai_compute_percent: 10,
+      platform_fee_percent: 5,
+    };
+
+    // Diagnostics in development
+    if (import.meta.env.DEV && isSupabaseConfigured() && supabase) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log('[CreateProject] Pre-publish Auth Diagnostic:', {
+        hasSession: Boolean(sessionData?.session),
+        authenticatedUserId: sessionData?.session?.user?.id ?? null,
+        profileId: profile?.id ?? null,
+        profileRole: profile?.role ?? null,
+      });
+    }
+
+    // Unified UUID for both Supabase and FastAPI
+    const projectId = crypto.randomUUID();
+
     try {
+      // 1. Persist real project to Supabase if configured
+      if (isSupabaseConfigured() && supabase) {
+        const { error: insertError } = await supabase.from('projects').insert({
+          id: projectId,
+          org_id: user.id,
+          title: projectTitle,
+          public_summary: cleanPublicSummary,
+          confidential_brief: cleanConfidentialBrief,
+          domain,
+          required_skills: skills,
+          sensitivity_level: sensitivityLevel,
+          engagement_model: engagementModel,
+          budget: budgetVal,
+          withdrawal_threshold: withdrawalVal,
+          ai_policy: aiPolicyPayload,
+          ip_ownership: ipOwnership.trim(),
+          authorship_rules: authorshipRules.trim(),
+          commercialization_terms: 'Non-commercial open research',
+          reward_structure: rewardStructurePayload,
+          duration_days: durationVal,
+          status: 'open',
+        });
+
+        if (insertError) {
+          throw new Error(`Supabase project insert failed [${insertError.code || 'RLS'}]: ${insertError.message}. Ensure authenticated user has organization role.`);
+        }
+
+        // Add organization owner to project_members
+        const { error: memberError } = await supabase.from('project_members').insert({
+          project_id: projectId,
+          user_id: user.id,
+          role: 'organization_owner',
+          status: 'active',
+        });
+        if (memberError) {
+          console.warn('[CreateProject] project_members insert notice:', memberError.message);
+        }
+
+        // Create initial charter v1.0
+        const { data: charterData, error: charterError } = await supabase.from('charters').insert({
+          project_id: projectId,
+          version: 1,
+          title: `Research Charter v1.0 — ${projectTitle}`,
+          scope: cleanPublicSummary,
+          ip_terms: ipOwnership.trim(),
+          authorship_terms: authorshipRules.trim(),
+          confidentiality_terms: 'Confidential assets restricted to signatories. Violations recorded on ledger.',
+          ai_policy_terms: JSON.stringify(aiPolicyPayload),
+          dispute_rules: 'Disputes adjudicated by Mentor & Council.',
+          withdrawal_rules: `Withdrawal threshold set at ${withdrawalVal} credits.`,
+          status: 'active',
+        }).select('id').single();
+
+        if (charterError) {
+          console.warn('[CreateProject] charter insert notice:', charterError.message);
+        } else if (charterData?.id) {
+          // Org owner signs charter
+          await supabase.from('charter_acceptances').insert({
+            charter_id: charterData.id,
+            user_id: user.id,
+          });
+        }
+
+        // Initialize escrow account
+        const { error: escrowError } = await supabase.from('escrow_accounts').insert({
+          project_id: projectId,
+          total_budget: budgetVal,
+          available_balance: budgetVal,
+          released_balance: 0,
+          status: 'funded',
+        });
+        if (escrowError) {
+          console.warn('[CreateProject] escrow insert notice:', escrowError.message);
+        }
+
+        // Initialize default Milestone 1
+        const { error: msError } = await supabase.from('milestones').insert({
+          project_id: projectId,
+          title: 'Milestone 1: Data Pipeline & Environment Setup',
+          description: 'Setup repository, data normalization, and containerized runtime.',
+          deliverables: ['Preprocessing code', 'Validation tests'],
+          acceptance_criteria: 'Pipeline passes unit tests with <2% data loss',
+          budget_allocation: budgetVal * 0.3,
+          status: 'in_progress',
+        });
+        if (msError) {
+          console.warn('[CreateProject] milestone insert notice:', msError.message);
+        }
+
+        // Insert public & confidential data-room metadata
+        const fileRows = [
+          ...publicFiles.map((fname) => ({
+            project_id: projectId,
+            name: fname,
+            storage_path: `/storage/public/${fname}`,
+            file_size: '45 KB',
+            is_confidential: false,
+            sensitivity_level: 'low',
+            uploaded_by: user.id,
+          })),
+          ...confidentialFiles.map((fname) => ({
+            project_id: projectId,
+            name: fname,
+            storage_path: `/storage/confidential/${fname}`,
+            file_size: '2.8 MB',
+            is_confidential: true,
+            sensitivity_level: 'high',
+            uploaded_by: user.id,
+          })),
+        ];
+        if (fileRows.length > 0) {
+          const { error: filesError } = await supabase.from('files').insert(fileRows);
+          if (filesError) {
+            console.warn('[CreateProject] files insert notice:', filesError.message);
+          }
+        }
+      }
+
+      // 2. Call FastAPI backend for SHA-256 cryptographic ledger & backend synchronization
       const res = await createProjectApi({
+        id: projectId,
         org_id: user.id,
         org_name: profile?.org_name || profile?.display_name || 'Research Organization',
-        title: title || 'Low-cost Diabetic Retinopathy Detection on Edge Devices',
-        public_summary: publicSummary,
-        confidential_brief: confidentialBrief,
+        title: projectTitle,
+        public_summary: cleanPublicSummary,
+        confidential_brief: cleanConfidentialBrief,
         domain,
         required_skills: skills,
         sensitivity_level: sensitivityLevel,
         engagement_model: engagementModel,
-        budget: Number(budget) || 100000,
-        withdrawal_threshold: Number(withdrawalThreshold) || 50,
-        duration_days: Number(durationDays) || 120,
-        ai_policy: {
-          cloud_allowed: cloudAllowed,
-          local_required: localRequired,
-          approved_models: approvedModels.split(',').map((m) => m.trim()).filter(Boolean),
-          human_approval_required: humanApprovalRequired,
-        },
-        ip_ownership: ipOwnership,
-        authorship_rules: authorshipRules,
+        budget: budgetVal,
+        withdrawal_threshold: withdrawalVal,
+        duration_days: durationVal,
+        ai_policy: aiPolicyPayload,
+        ip_ownership: ipOwnership.trim(),
+        authorship_rules: authorshipRules.trim(),
         public_files: publicFiles,
         confidential_files: confidentialFiles,
       });
 
-      navigate(`/projects/${res.project_id}`);
+      const effectiveProjectId = res?.project_id || projectId;
+      navigate(`/projects/${effectiveProjectId}`);
     } catch (err: any) {
-      console.error(err);
+      console.error('[CreateProject] Project creation error:', err);
       setErrorMsg(err.message || 'Failed to create research project.');
     } finally {
       setIsSubmitting(false);

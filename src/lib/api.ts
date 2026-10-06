@@ -201,6 +201,7 @@ export async function fetchProjectDetails(projectId: string, userId?: string) {
 }
 
 export async function createProjectApi(payload: {
+  id?: string;
   org_id: string;
   org_name: string;
   title: string;
@@ -219,14 +220,33 @@ export async function createProjectApi(payload: {
   public_files?: string[];
   confidential_files?: string[];
 }) {
-  const res = await fetch(`${API_BASE_URL}/projects`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  const url = `${API_BASE_URL}/projects`;
+  const method = 'POST';
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err: any) {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'unknown-origin';
+    const errorMsg = `Project creation API unavailable: ${url} (HTTP ${method} failed before receiving response: ${err?.name || 'Error'} - ${err?.message || 'Network failure'}). Please check if FastAPI backend is running at ${API_BASE_URL} and allows CORS requests from ${origin}.`;
+    console.error(errorMsg, err);
+    throw new Error(errorMsg);
+  }
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Failed to create project' }));
-    throw new Error(err.detail || 'Failed to create project');
+    let errorDetail = '';
+    try {
+      const errJson = await res.json();
+      errorDetail = errJson.detail || errJson.message || JSON.stringify(errJson);
+    } catch {
+      errorDetail = await res.text().catch(() => res.statusText);
+    }
+    const errorMsg = `Project creation API error: ${method} ${url} responded with status ${res.status} (${res.statusText}): ${errorDetail}`;
+    console.error(errorMsg);
+    throw new Error(errorMsg);
   }
   return await res.json();
 }

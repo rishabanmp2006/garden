@@ -5,7 +5,7 @@ import {
   GitCommitHorizontal, Coins, User, Star, Settings,
   Plus, Users, ShieldCheck, AlertTriangle, BookOpen,
   ClipboardList, Wallet, BarChart3, CheckSquare,
-  FolderOpen, LogOut, Hexagon,
+  FolderOpen, LogOut, Hexagon, UserCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -30,6 +30,7 @@ function getNavItems(role: UserRole): NavItemDef[] {
         { label: 'Credits', path: '/credits', icon: <Coins size={18} />, section: 'Profile' },
         { label: 'Portfolio', path: '/portfolio', icon: <User size={18} /> },
         { label: 'Ratings', path: '/ratings', icon: <Star size={18} /> },
+        { label: 'Research Identity', path: '/profile', icon: <UserCircle size={18} /> },
       ];
     case 'organization':
       return [
@@ -43,6 +44,7 @@ function getNavItems(role: UserRole): NavItemDef[] {
         { label: 'Escrow', path: '/escrow', icon: <Wallet size={18} />, section: 'Finance' },
         { label: 'Analytics', path: '/analytics', icon: <BarChart3 size={18} /> },
         { label: 'Ratings', path: '/ratings', icon: <Star size={18} /> },
+        { label: 'Research Identity', path: '/profile', icon: <UserCircle size={18} />, section: 'Profile' },
       ];
     case 'mentor':
       return [
@@ -53,6 +55,7 @@ function getNavItems(role: UserRole): NavItemDef[] {
         { label: 'Contributions', path: '/contributions', icon: <GitCommitHorizontal size={18} /> },
         { label: 'Credits', path: '/credits', icon: <Coins size={18} />, section: 'Profile' },
         { label: 'Ratings', path: '/ratings', icon: <Star size={18} /> },
+        { label: 'Research Identity', path: '/profile', icon: <UserCircle size={18} /> },
       ];
     case 'admin':
       return [

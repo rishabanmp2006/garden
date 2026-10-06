@@ -18,6 +18,9 @@ import { CreditsPage } from './pages/credits/CreditsPage';
 import { PortfolioPage } from './pages/portfolio/PortfolioPage';
 import { RatingsPage } from './pages/ratings/RatingsPage';
 import { MatchingPage } from './pages/matching/MatchingPage';
+import { ProfilePage } from './pages/profile/ProfilePage';
+import { MilestonesPage } from './pages/milestones/MilestonesPage';
+import { AnalyticsPage } from './pages/analytics/AnalyticsPage';
 
 // Admin Pages
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
@@ -100,6 +103,10 @@ export default function App() {
             <Route path="/portfolio" element={<PortfolioPage />} />
             <Route path="/portfolio/:userId" element={<PortfolioPage />} />
             <Route path="/ratings" element={<RatingsPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/milestones" element={<MilestonesPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/reviews" element={<ContributionsPage />} />
 
             {/* Admin & Governance */}
             <Route path="/admin" element={<DashboardPage />} />

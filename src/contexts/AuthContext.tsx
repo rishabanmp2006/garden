@@ -301,34 +301,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateProfile = useCallback(async (updates: Partial<Profile>) => {
     if (!user) return;
     if (isSupabaseConfigured() && supabase) {
+      // Use upsert to guarantee persistence whether the row exists or is being initialized
       const { data, error } = await supabase
         .from('profiles')
-        .update({
+        .upsert({
+          id: user.id,
+          email: user.email,
           ...updates,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', user.id)
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase profile persistence error:', error);
+        throw error;
+      }
+
       if (data) {
         setProfile(data as Profile);
         setUser(prev => prev ? {
           ...prev,
           display_name: data.display_name || prev.display_name,
-          role: data.role || prev.role,
+          role: (data.role as UserRole) || prev.role,
           verified: data.verified !== undefined ? data.verified : prev.verified,
         } : null);
       }
     }
 
-    // Always update FastAPI SQLite backend
+    // Attempt optional FastAPI SQLite backend synchronization
     try {
-      await syncUserProfile(user.id, updates);
-      await refreshProfile();
+      const backendPayload = {
+        ...updates,
+        domains: Array.isArray(updates.domains) ? updates.domains.join(', ') : updates.domains,
+      };
+      await syncUserProfile(user.id, backendPayload);
     } catch (e) {
-      console.warn('Sync profile error:', e);
+      console.warn('Backend SQLite profile sync note:', e);
+    } finally {
+      // Guarantee refresh from Supabase to keep state in sync with database
+      await refreshProfile();
     }
   }, [user, refreshProfile]);
 

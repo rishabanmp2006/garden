@@ -12,6 +12,7 @@ router = APIRouter(prefix="/projects", tags=["Research Projects & Workspace Life
 
 # Schemas
 class CreateProjectPayload(BaseModel):
+    id: Optional[str] = None
     org_id: str
     org_name: Optional[str] = "Organization"
     title: str
@@ -89,7 +90,7 @@ def create_project(payload: CreateProjectPayload):
     conn = get_db()
     cursor = conn.cursor()
     
-    project_id = f"proj-{uuid.uuid4().hex[:8]}"
+    project_id = payload.id if payload.id else f"proj-{uuid.uuid4().hex[:8]}"
     now_ts = datetime.now(timezone.utc).isoformat()
 
     # Insert Project

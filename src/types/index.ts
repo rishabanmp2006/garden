@@ -47,6 +47,7 @@ export interface Profile {
   user_id: string;
   role: UserRole;
   display_name?: string;
+  avatar_url?: string;
   email?: string;
   verified?: boolean;
   contact_email?: string;
