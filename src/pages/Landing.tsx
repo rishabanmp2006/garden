@@ -1,159 +1,290 @@
-import { Fragment } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Shield, GitCommitHorizontal, Scale,
-  ArrowRight, Hexagon, ChevronRight,
-  Lock, Users, Bot, CheckCircle2,
-  Search, Plus, FileText,
+  Hexagon, Search, Plus, Shield, Lock,
+  CheckCircle2, MessageSquare, Check
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/Button';
 
 export function Landing() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<'discussions' | 'tasks' | 'files' | 'overview'>('discussions');
+
+  const handlePostProblem = () => {
+    if (user) {
+      navigate('/projects/create');
+    } else {
+      navigate('/auth');
+    }
+  };
+
+  const handleGetStarted = () => {
+    if (user) {
+      navigate('/dashboard');
+    } else {
+      navigate('/auth');
+    }
+  };
+
+  const scrollToSecurity = () => {
+    const el = document.getElementById('security');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Header */}
-      <header className="border-b border-[#E2E8F0]">
-        <div className="max-w-[1100px] mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[#0F172A] rounded-lg flex items-center justify-center">
-              <Hexagon size={16} className="text-white" />
+    <div className="min-h-screen bg-white text-[#0F172A] flex flex-col font-sans antialiased selection:bg-[#DBEAFE] selection:text-[#1D4ED8]">
+      {/* 1. NAVBAR */}
+      <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-xs border-b border-[#E2E8F0]">
+        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+          {/* Logo */}
+          <div
+            className="flex items-center gap-2.5 cursor-pointer"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          >
+            <div className="w-6 h-6 bg-[#0F172A] rounded-md flex items-center justify-center text-white">
+              <Hexagon size={13} strokeWidth={2.5} />
             </div>
-            <span className="text-sm font-bold text-[#0F172A] tracking-tight">ResearchMesh</span>
+            <span className="text-sm font-semibold tracking-tight text-[#0F172A]">ResearchMesh</span>
           </div>
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={() => navigate('/auth')}>
-              Sign in
-            </Button>
-            <Button size="sm" onClick={() => navigate('/auth')}>
-              Get started
-            </Button>
+
+          {/* Navigation Links */}
+          <nav className="flex items-center gap-6 text-xs text-[#64748B]">
+            <button
+              onClick={() => navigate('/projects')}
+              className="hover:text-[#0F172A] transition-colors cursor-pointer"
+            >
+              Explore Research
+            </button>
+            <button
+              onClick={scrollToSecurity}
+              className="hover:text-[#0F172A] transition-colors cursor-pointer"
+            >
+              Security
+            </button>
+          </nav>
+
+          {/* Right Actions */}
+          <div className="flex items-center gap-2">
+            {user ? (
+              <Button size="sm" onClick={() => navigate('/dashboard')}>
+                Dashboard
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => navigate('/auth')}>
+                  Sign in
+                </Button>
+                <Button size="sm" onClick={handleGetStarted}>
+                  Get started
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Hero */}
-      <section className="border-b border-[#E2E8F0]">
-        <div className="max-w-[1100px] mx-auto px-6 py-20 text-center">
-          <div className="inline-flex items-center gap-2 bg-[#F1F5F9] border border-[#E2E8F0] rounded-full px-3 py-1 mb-6">
-            <span className="w-1.5 h-1.5 bg-[#15803D] rounded-full" />
-            <span className="text-xs font-medium text-[#475569]">Open for research collaboration</span>
+      {/* 2. HERO */}
+      <main className="flex-1 flex flex-col items-center justify-start pt-16 sm:pt-20 pb-16 px-6">
+        <div className="max-w-3xl w-full mx-auto text-center space-y-6">
+          {/* Eyebrow */}
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium text-[#475569] bg-[#F8FAFC] border border-[#E2E8F0]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#15803D]" />
+            Trusted research collaboration
           </div>
-          <h1 className="text-4xl font-bold text-[#0F172A] leading-tight max-w-2xl mx-auto">
-            Research collaboration with privacy, provenance and accountability
+
+          {/* Headline */}
+          <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-[#0F172A] leading-[1.12]">
+            Research teams, connected by trust.
           </h1>
-          <p className="text-lg text-[#64748B] mt-4 max-w-xl mx-auto leading-relaxed">
-            Connect organizations, experts and students in trusted project workspaces where
-            humans and AI collaborate under clear rules.
+
+          {/* Subheadline */}
+          <p className="text-base sm:text-lg text-[#64748B] max-w-xl mx-auto leading-relaxed font-normal">
+            Connect organizations, researchers and mentors in secure workspaces built for collaborative research.
           </p>
-          <div className="flex items-center justify-center gap-3 mt-8">
-            <Button size="lg" onClick={() => navigate('/projects')} icon={<Search size={16} />}>
+
+          {/* Hero CTAs */}
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <Button size="md" onClick={() => navigate('/projects')} icon={<Search size={15} />}>
               Explore Research
             </Button>
-            <Button variant="secondary" size="lg" onClick={() => navigate('/auth')} icon={<Plus size={16} />}>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={handlePostProblem}
+              icon={<Plus size={15} />}
+            >
               Post a Research Problem
             </Button>
           </div>
         </div>
-      </section>
 
-      {/* Three Pillars */}
-      <section className="border-b border-[#E2E8F0]">
-        <div className="max-w-[1100px] mx-auto px-6 py-16">
-          <div className="grid grid-cols-3 gap-8">
-            <PillarCard
-              icon={<Shield size={20} />}
-              title="Private AI"
-              description="AI routing based on project sensitivity. Confidential data stays on local models. Cloud AI only for public analysis."
-            />
-            <PillarCard
-              icon={<GitCommitHorizontal size={20} />}
-              title="Verified Contribution"
-              description="Human and AI actions are traceable. Every contribution is hash-chained and attributed. Tamper-evident ledger."
-            />
-            <PillarCard
-              icon={<Scale size={20} />}
-              title="Fair Credit"
-              description="Contribution, recognition and rewards are transparent. AI does not earn credits — humans who direct AI do."
-            />
-          </div>
-        </div>
-      </section>
+        {/* PRODUCT PREVIEW */}
+        <div className="w-full max-w-3xl mt-12 sm:mt-16">
+          <div className="bg-white rounded-lg border border-[#E2E8F0] shadow-xs overflow-hidden text-left">
+            {/* Workspace Header Strip */}
+            <div className="p-5 border-b border-[#F1F5F9] bg-[#FAFAFA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-[11px] font-medium text-[#64748B] block uppercase tracking-wider">
+                  Research Workspace
+                </span>
+                <h3 className="text-base font-semibold text-[#0F172A] mt-0.5">
+                  Low-cost diabetic retinopathy detection
+                </h3>
+              </div>
 
-      {/* How it works */}
-      <section className="border-b border-[#E2E8F0]">
-        <div className="max-w-[1100px] mx-auto px-6 py-16">
-          <h2 className="text-lg font-bold text-[#0F172A] text-center mb-10">How it works</h2>
-          <div className="flex items-center justify-between">
-            {[
-              { step: 'Post', desc: 'Organization posts research problem', icon: <FileText size={18} /> },
-              { step: 'Match', desc: 'AI matches suitable contributors', icon: <Bot size={18} /> },
-              { step: 'Agree', desc: 'Team accepts project charter', icon: <CheckCircle2 size={18} /> },
-              { step: 'Collaborate', desc: 'Work in governed workspace', icon: <Users size={18} /> },
-              { step: 'Verify', desc: 'Contributions reviewed & recorded', icon: <GitCommitHorizontal size={18} /> },
-              { step: 'Reward', desc: 'Credits and rewards distributed', icon: <Scale size={18} /> },
-            ].map((item, i) => (
-              <Fragment key={item.step}>
-                <div className="flex flex-col items-center text-center w-[140px]">
-                  <div className="w-10 h-10 rounded-lg bg-[#F1F5F9] border border-[#E2E8F0] flex items-center justify-center text-[#475569] mb-3">
-                    {item.icon}
-                  </div>
-                  <p className="text-xs font-semibold text-[#0F172A]">{item.step}</p>
-                  <p className="text-[11px] text-[#64748B] mt-1 leading-tight">{item.desc}</p>
+              {/* Roster stats */}
+              <div className="flex items-center gap-4 text-xs text-[#64748B] shrink-0">
+                <span>
+                  Team: <strong className="text-[#0F172A] font-semibold">5</strong>
+                </span>
+                <span className="text-[#E2E8F0]">•</span>
+                <span>
+                  Milestones: <strong className="text-[#0F172A] font-semibold">3</strong>
+                </span>
+                <span className="text-[#E2E8F0]">•</span>
+                <span>
+                  Contributions: <strong className="text-[#0F172A] font-semibold">18</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Quiet Workspace Navigation Tabs */}
+            <div className="px-5 border-b border-[#F1F5F9] flex items-center gap-6 text-xs bg-white">
+              {(['overview', 'tasks', 'files', 'discussions'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`py-2.5 font-medium border-b-2 capitalize transition-colors cursor-pointer ${
+                    activeTab === tab
+                      ? 'border-[#1D4ED8] text-[#1D4ED8]'
+                      : 'border-transparent text-[#64748B] hover:text-[#0F172A]'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            {/* Workspace Preview Content */}
+            <div className="p-5 grid grid-cols-1 md:grid-cols-12 gap-6 bg-white">
+              {/* Left: Small Discussion Panel */}
+              <div className="md:col-span-7 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-[#475569]">
+                  <MessageSquare size={13} className="text-[#64748B]" />
+                  <span>Team Discussion</span>
                 </div>
-                {i < 5 && <ChevronRight size={16} className="text-[#CBD5E1] mt-[-20px]" />}
-              </Fragment>
-            ))}
+
+                <div className="space-y-2 text-xs">
+                  {/* Expert message */}
+                  <div className="p-3 bg-[#F8FAFC] rounded border border-[#E2E8F0] space-y-1">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-[#0F172A]">Dr. Marcus Vance</span>
+                      <span className="text-[#94A3B8]">Expert / Mentor</span>
+                    </div>
+                    <p className="text-[#475569] leading-relaxed">
+                      "Try benchmarking MobileNetV3 against the current baseline."
+                    </p>
+                  </div>
+
+                  {/* Student message */}
+                  <div className="p-3 bg-[#F8FAFC] rounded border border-[#E2E8F0] space-y-1">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-[#0F172A]">Rishaban MP</span>
+                      <span className="text-[#94A3B8]">Student Researcher</span>
+                    </div>
+                    <p className="text-[#475569] leading-relaxed">
+                      "I've uploaded the first benchmark results."
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Small Activity & Status Indicator */}
+              <div className="md:col-span-5 md:border-l md:border-[#F1F5F9] md:pl-6 space-y-3">
+                <span className="text-xs font-semibold text-[#475569] block">
+                  Workspace Status
+                </span>
+
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex items-center gap-2 text-[#334155]">
+                    <CheckCircle2 size={13} className="text-[#15803D] shrink-0" />
+                    <span>Contribution verified</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[#334155]">
+                    <Check size={13} className="text-[#15803D] shrink-0" />
+                    <span>Methodology reviewed</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[#334155]">
+                    <Lock size={12} className="text-[#B45309] shrink-0" />
+                    <span>Confidential dataset protected</span>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#F1F5F9]">
+                  <div className="text-[11px] text-[#64748B] flex items-center justify-between">
+                    <span>AI Execution Policy:</span>
+                    <span className="font-medium text-[#0F172A]">Air-gapped Local</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </section>
 
-      {/* Trust indicators */}
-      <section className="border-b border-[#E2E8F0]">
-        <div className="max-w-[1100px] mx-auto px-6 py-12">
-          <div className="flex items-center justify-center gap-10 text-xs text-[#94A3B8]">
-            <div className="flex items-center gap-2">
-              <Lock size={14} />
-              <span>SHA-256 hash chain</span>
+        {/* 3. SMALL TRUST / FEATURE STRIP */}
+        <section id="security" className="w-full max-w-3xl mt-16 pt-10 border-t border-[#E2E8F0]">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-[#0F172A] flex items-center gap-1.5">
+                <Shield size={13} className="text-[#1D4ED8]" />
+                Private AI
+              </h4>
+              <p className="text-xs text-[#64748B]">
+                Sensitive work stays protected.
+              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Shield size={14} />
-              <span>Policy-aware AI routing</span>
+
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-[#0F172A] flex items-center gap-1.5">
+                <CheckCircle2 size={13} className="text-[#1D4ED8]" />
+                Verified Contributions
+              </h4>
+              <p className="text-xs text-[#64748B]">
+                Work is attributed and reviewable.
+              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Users size={14} />
-              <span>Role-based access control</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 size={14} />
-              <span>Human approval required</span>
+
+            <div className="space-y-1">
+              <h4 className="text-xs font-semibold text-[#0F172A] flex items-center gap-1.5">
+                <Lock size={13} className="text-[#1D4ED8]" />
+                Governed Rewards
+              </h4>
+              <p className="text-xs text-[#64748B]">
+                Terms are agreed before work begins.
+              </p>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </main>
 
-      {/* Footer */}
-      <footer className="py-8">
-        <div className="max-w-[1100px] mx-auto px-6 text-center">
-          <p className="text-xs text-[#94A3B8]">
-            ResearchMesh — Gardenia 2K26 Hackathon Prototype.
-            Not a production system. Escrow is simulated. Credits are reputation points, not cryptocurrency.
-          </p>
+      {/* Minimal Footer */}
+      <footer className="border-t border-[#E2E8F0] py-6 text-center text-xs text-[#94A3B8]">
+        <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-[#0F172A] rounded flex items-center justify-center text-white">
+              <Hexagon size={9} strokeWidth={2.5} />
+            </div>
+            <span className="font-semibold text-[#0F172A]">ResearchMesh</span>
+            <span>•</span>
+            <span>Trusted collaboration for research.</span>
+          </div>
+          <div>© {new Date().getFullYear()} ResearchMesh</div>
         </div>
       </footer>
-    </div>
-  );
-}
-
-function PillarCard({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
-  return (
-    <div className="border border-[#E2E8F0] rounded-lg p-6">
-      <div className="w-10 h-10 rounded-lg bg-[#F1F5F9] flex items-center justify-center text-[#334155] mb-4">
-        {icon}
-      </div>
-      <h3 className="text-sm font-semibold text-[#0F172A] mb-2">{title}</h3>
-      <p className="text-sm text-[#64748B] leading-relaxed">{description}</p>
     </div>
   );
 }

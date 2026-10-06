@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   FileText, CheckCircle2, XCircle, Clock, Sparkles,
@@ -8,7 +8,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { StatusBadge } from '../../components/ui/Badge';
-import { fetchUserApplications, acceptApplicantApi, rejectApplicantApi } from '../../lib/api';
+import { acceptApplicantApi, rejectApplicantApi, fetchUserApplications } from '../../lib/api';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 export function MyApplications() {
   const { user } = useAuth();
@@ -16,38 +17,170 @@ export function MyApplications() {
 
   const [applications, setApplications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const isOrg = user?.role === 'organization' || user?.role === 'admin';
 
-  const loadApps = async () => {
+  const loadApps = useCallback(async () => {
     if (!user) return;
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      const data = await fetchUserApplications(user.id);
-      setApplications(data);
-    } catch (err) {
+      if (isSupabaseConfigured() && supabase) {
+        if (isOrg) {
+          // Organization: query pending applications across owned projects
+          const { data: myProjects, error: pErr } = await supabase
+            .from('projects')
+            .select('id')
+            .eq('org_id', user.id);
+
+          if (pErr) throw pErr;
+
+          const projectIds = (myProjects || []).map((p: any) => p.id);
+          if (projectIds.length === 0) {
+            setApplications([]);
+          } else {
+            const { data: orgApps, error: aErr } = await supabase
+              .from('applications')
+              .select(`
+                *,
+                projects(
+                  id,
+                  title,
+                  domain,
+                  org_id,
+                  profiles:org_id(
+                    display_name,
+                    org_name
+                  )
+                ),
+                profiles:user_id(
+                  id,
+                  display_name,
+                  email,
+                  education,
+                  availability,
+                  skills
+                )
+              `)
+              .in('project_id', projectIds)
+              .order('created_at', { ascending: false });
+
+            if (aErr) throw aErr;
+
+            const formatted = (orgApps || []).map((app: any) => ({
+              ...app,
+              project_title: app.projects?.title || 'Research Project',
+              domain: app.projects?.domain,
+              org_name: app.projects?.profiles?.org_name || app.projects?.profiles?.display_name || 'Organization',
+              display_name: app.profiles?.display_name || 'Applicant',
+              email: app.profiles?.email,
+              education: app.profiles?.education,
+              availability: app.profiles?.availability,
+              applicant_skills: app.profiles?.skills || app.relevant_skills || [],
+            }));
+            setApplications(formatted);
+          }
+        } else {
+          // Student: query submitted applications
+          const { data: stuApps, error: sErr } = await supabase
+            .from('applications')
+            .select(`
+              *,
+              projects(
+                id,
+                title,
+                domain,
+                org_id,
+                profiles:org_id(
+                  display_name,
+                  org_name
+                )
+              )
+            `)
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false });
+
+          if (sErr) throw sErr;
+
+          const formatted = (stuApps || []).map((app: any) => ({
+            ...app,
+            project_title: app.projects?.title || 'Research Project',
+            domain: app.projects?.domain,
+            org_name: app.projects?.profiles?.org_name || app.projects?.profiles?.display_name || 'Organization',
+          }));
+          setApplications(formatted);
+        }
+      } else {
+        // Fallback to local API if Supabase not configured
+        const data = await fetchUserApplications(user.id);
+        setApplications(Array.isArray(data) ? data : []);
+      }
+    } catch (err: any) {
       console.error('Failed to load applications:', err);
+      setError(err.message || 'Failed to load live applications from database.');
+      setApplications([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, isOrg]);
 
   useEffect(() => {
     loadApps();
-  }, [user]);
+  }, [loadApps]);
 
   const handleUpdateStatus = async (appId: string, newStatus: 'accepted' | 'rejected') => {
     if (!user) return;
     try {
       setActionLoading(appId);
-      if (newStatus === 'accepted') {
-        await acceptApplicantApi(appId, user.id);
-      } else {
-        await rejectApplicantApi(appId, { reviewer_id: user.id });
+      const app = applications.find((a: any) => a.id === appId);
+      const nowTs = new Date().toISOString();
+
+      if (isSupabaseConfigured() && supabase) {
+        // 1. Update application in Supabase
+        const { error: appErr } = await supabase
+          .from('applications')
+          .update({
+            status: newStatus,
+            reviewed_by: user.id,
+            reviewed_at: nowTs,
+          })
+          .eq('id', appId);
+
+        if (appErr) throw appErr;
+
+        // 2. If accepted, upsert active project membership in Supabase
+        if (newStatus === 'accepted' && app) {
+          const { error: memErr } = await supabase
+            .from('project_members')
+            .upsert(
+              {
+                project_id: app.project_id,
+                user_id: app.user_id,
+                role: app.role || 'student',
+                status: 'active',
+              },
+              { onConflict: 'project_id,user_id' }
+            );
+
+          if (memErr) throw memErr;
+        }
       }
+
+      // 3. FastAPI SHA-256 Ledger logging (non-blocking)
+      try {
+        if (newStatus === 'accepted') {
+          await acceptApplicantApi(appId, user.id);
+        } else {
+          await rejectApplicantApi(appId, { reviewer_id: user.id });
+        }
+      } catch (ledgerErr) {
+        console.warn('[MyApplications] SHA-256 ledger provenance logging note:', ledgerErr);
+      }
+
       setApplications((prev) =>
-        prev.map((app) => (app.id === appId ? { ...app, status: newStatus } : app))
+        prev.map((a) => (a.id === appId ? { ...a, status: newStatus } : a))
       );
     } catch (err: any) {
       alert(`Action failed: ${err.message || err}`);
@@ -81,14 +214,27 @@ export function MyApplications() {
         </Button>
       </div>
 
+      {/* Error state */}
+      {error && (
+        <Card className="p-4 bg-[#FEF2F2] border-[#FCA5A5] flex items-center justify-between text-xs text-[#991B1B]">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} className="text-[#DC2626] shrink-0" />
+            <span>Database Error: {error}</span>
+          </div>
+          <Button size="sm" variant="secondary" onClick={loadApps}>
+            Retry
+          </Button>
+        </Card>
+      )}
+
       {/* Applications list */}
       <div className="space-y-4">
-        {loading ? (
+        {loading && !error ? (
           <div className="text-center py-12 text-xs text-[#64748B]">
             <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-[#1D4ED8]" />
             Loading live applications from database...
           </div>
-        ) : applications.length === 0 ? (
+        ) : applications.length === 0 && !error ? (
           <Card className="p-8 text-center bg-white">
             <FileText size={32} className="mx-auto text-[#94A3B8] mb-2" />
             <h3 className="text-sm font-semibold text-[#0F172A]">No applications found</h3>
@@ -124,9 +270,13 @@ export function MyApplications() {
 
                   <div className="flex items-center gap-1.5 text-xs text-[#64748B]">
                     <Building2 size={13} />
-                    <span>{app.org_name || app.organization_title || 'Organization'}</span>
-                    <span>•</span>
-                    <span>{app.domain}</span>
+                    <span>{app.org_name || 'Organization'}</span>
+                    {app.domain && (
+                      <>
+                        <span>•</span>
+                        <span>{app.domain}</span>
+                      </>
+                    )}
                   </div>
 
                   {isOrg && (
@@ -136,7 +286,7 @@ export function MyApplications() {
                           {(app.display_name || 'U').charAt(0)}
                         </div>
                         <span className="font-semibold text-[#0F172A]">{app.display_name}</span>
-                        <span className="text-[#64748B]">({app.email})</span>
+                        {app.email && <span className="text-[#64748B]">({app.email})</span>}
                       </div>
                       <div className="space-y-1">
                         {app.education && (
@@ -179,7 +329,7 @@ export function MyApplications() {
                           {app.match_score > 1 ? app.match_score : Math.round(app.match_score * 100)}% Match
                         </span>
                       </div>
-                      {app.match_reasons && app.match_reasons.length > 0 && (
+                      {Array.isArray(app.match_reasons) && app.match_reasons.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 pt-1">
                           {app.match_reasons.map((reason: string, i: number) => (
                             <span
@@ -224,7 +374,7 @@ export function MyApplications() {
                       size="sm"
                       className="w-full justify-center"
                       icon={<ChevronRight size={14} />}
-                      onClick={() => navigate(`/workspace/${app.project_id}`)}
+                      onClick={() => navigate(`/projects/${app.project_id}/workspace`)}
                     >
                       Enter Workspace
                     </Button>

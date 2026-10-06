@@ -88,6 +88,7 @@ export default function App() {
             <Route path="/applicants" element={<MyApplications />} />
 
             {/* Workspaces & Collaboration */}
+            <Route path="/projects/:projectId/workspace" element={<WorkspacePage />} />
             <Route path="/workspaces" element={<WorkspacePage />} />
             <Route path="/workspace/:id" element={<WorkspacePage />} />
             <Route path="/workspace/:id/ai" element={<AIPage />} />

@@ -360,3 +360,5 @@ export interface NavItem {
   icon: string;
   section?: string;
 }
+
+export type * from './workspace';

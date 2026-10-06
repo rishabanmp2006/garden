@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Building2, CheckCircle2, Lock, Shield,
@@ -18,6 +18,7 @@ import {
   acceptCharterApi,
   generateWatermark
 } from '../../lib/api';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
@@ -38,24 +39,156 @@ export function ProjectPage() {
   const [isSigningCharter, setIsSigningCharter] = useState(false);
   const [downloadReceipt, setDownloadReceipt] = useState<any>(null);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!id) return;
     setLoading(true);
+    setError(null);
     try {
-      const data = await fetchProjectDetails(id, user?.id);
-      setProjectData(data);
+      if (isSupabaseConfigured() && supabase) {
+        // Direct query to authoritative Supabase tables
+        const [
+          { data: p, error: pErr },
+          { data: rawMembers },
+          { data: rawMilestones },
+          { data: rawCharter },
+          { data: rawEscrow },
+          { data: rawFiles },
+          { data: rawAcceptances },
+          { data: rawApplication }
+        ] = await Promise.all([
+          supabase
+            .from('projects')
+            .select('*, profiles:org_id(id, display_name, org_name, verified)')
+            .eq('id', id)
+            .single(),
+          supabase
+            .from('project_members')
+            .select('*, profiles:user_id(id, display_name, email, education, skills)')
+            .eq('project_id', id),
+          supabase
+            .from('milestones')
+            .select('*, tasks(*)')
+            .eq('project_id', id)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('charters')
+            .select('*')
+            .eq('project_id', id)
+            .eq('status', 'active')
+            .maybeSingle(),
+          supabase
+            .from('escrow_accounts')
+            .select('*')
+            .eq('project_id', id)
+            .maybeSingle(),
+          supabase
+            .from('files')
+            .select('*')
+            .eq('project_id', id),
+          user?.id
+            ? supabase.from('charter_acceptances').select('*').eq('user_id', user.id)
+            : Promise.resolve({ data: [] }),
+          user?.id
+            ? supabase.from('applications').select('*').eq('project_id', id).eq('user_id', user.id).maybeSingle()
+            : Promise.resolve({ data: null })
+        ]);
+
+        if (pErr) throw pErr;
+        if (!p) throw new Error('Research project not found');
+
+        const isMember = Boolean(
+          rawMembers?.some((m: any) => m.user_id === user?.id && m.status === 'active') ||
+          (user?.id && user.id === p.org_id)
+        );
+        const myMemberRecord = rawMembers?.find((m: any) => m.user_id === user?.id && m.status === 'active');
+        const userRole = myMemberRecord?.role || (user?.id === p.org_id ? 'organization_owner' : null);
+
+        const hasAcceptedCharter = Boolean(
+          rawCharter?.id &&
+          (
+            rawAcceptances?.some((a: any) => a.charter_id === rawCharter.id) ||
+            user?.id === p.org_id
+          )
+        );
+
+        const canViewConfidential = isMember && hasAcceptedCharter;
+
+        const members = (rawMembers || []).map((m: any) => ({
+          user_id: m.user_id,
+          role: m.role,
+          status: m.status,
+          joined_at: m.joined_at,
+          display_name: m.profiles?.display_name || m.profiles?.email?.split('@')[0] || 'Researcher',
+          email: m.profiles?.email,
+          education: m.profiles?.education,
+          skills: m.profiles?.skills || [],
+        }));
+
+        const visibleFiles = (rawFiles || []).filter(
+          (f: any) => !f.is_confidential || canViewConfidential
+        );
+
+        const formattedProject = {
+          id: p.id,
+          org_id: p.org_id,
+          org_name: p.profiles?.org_name || p.profiles?.display_name || 'Research Organization',
+          org_verified: Boolean(p.profiles?.verified),
+          title: p.title,
+          public_summary: p.public_summary,
+          confidential_brief: canViewConfidential ? p.confidential_brief : null,
+          is_confidential_locked: !canViewConfidential,
+          domain: p.domain,
+          required_skills: Array.isArray(p.required_skills) ? p.required_skills : [],
+          sensitivity_level: p.sensitivity_level,
+          engagement_model: p.engagement_model,
+          budget: p.budget,
+          withdrawal_threshold: p.withdrawal_threshold,
+          ai_policy: typeof p.ai_policy === 'string' ? JSON.parse(p.ai_policy) : (p.ai_policy || {}),
+          ip_ownership: p.ip_ownership,
+          authorship_rules: p.authorship_rules,
+          duration_days: p.duration_days,
+          status: p.status,
+          created_at: p.created_at,
+        };
+
+        setProjectData({
+          project: formattedProject,
+          is_member: isMember,
+          user_role: userRole,
+          has_accepted_charter: hasAcceptedCharter,
+          members,
+          milestones: rawMilestones || [],
+          tasks: (rawMilestones || []).flatMap((m: any) => m.tasks || []),
+          files: visibleFiles,
+          charter: rawCharter,
+          escrow: rawEscrow,
+        });
+
+        if (rawApplication) {
+          setHasApplied(true);
+          setApplicationResult(rawApplication);
+        }
+      } else {
+        const data = await fetchProjectDetails(id, user?.id);
+        setProjectData(data);
+      }
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Failed to load project details.');
+      console.warn('Supabase project fetch note, falling back to local service:', err);
+      try {
+        const data = await fetchProjectDetails(id, user?.id);
+        setProjectData(data);
+      } catch (apiErr: any) {
+        console.error('Failed to load project details from all sources:', apiErr);
+        setError(err.message || apiErr.message || 'Failed to load project details.');
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, user?.id]);
 
   useEffect(() => {
     loadData();
-  }, [id, user?.id]);
-
+  }, [loadData]);
 
   const project = projectData?.project;
   const members = projectData?.members || [];
@@ -88,13 +221,41 @@ export function ProjectPage() {
     if (!user || !project) return;
     setIsApplying(true);
     try {
-      const res = await applyToProjectApi(project.id, {
-        user_id: user.id,
-        role: applyRole,
-        message: applyMessage,
-        relevant_skills: userSkills,
-      });
-      setApplicationResult(res);
+      // 1. Call FastAPI to compute deterministic match score & register on SHA-256 ledger
+      let apiRes: any = null;
+      try {
+        apiRes = await applyToProjectApi(project.id, {
+          user_id: user.id,
+          role: applyRole,
+          message: applyMessage,
+          relevant_skills: userSkills,
+        });
+      } catch (apiErr) {
+        console.warn('FastAPI ledger application note:', apiErr);
+      }
+
+      const matchScore = apiRes?.match_score ?? matchPct;
+      const matchReasons = apiRes?.match_reasons ?? (matchedSkills.length > 0 ? [`Matched skills: ${matchedSkills.join(', ')}`] : []);
+
+      // 2. Persist application directly in Supabase
+      if (isSupabaseConfigured() && supabase) {
+        const { error: appInsertErr } = await supabase.from('applications').upsert({
+          project_id: project.id,
+          user_id: user.id,
+          role: applyRole,
+          message: applyMessage,
+          relevant_skills: userSkills,
+          match_score: matchScore,
+          match_reasons: matchReasons,
+          status: 'pending',
+        }, { onConflict: 'project_id,user_id' });
+
+        if (appInsertErr) {
+          console.warn('Supabase application upsert notice:', appInsertErr.message);
+        }
+      }
+
+      setApplicationResult(apiRes || { match_score: matchScore, match_reasons: matchReasons });
       setHasApplied(true);
       setIsApplyModalOpen(false);
     } catch (err: any) {
@@ -108,7 +269,24 @@ export function ProjectPage() {
     if (!user || !project) return;
     setIsSigningCharter(true);
     try {
-      await acceptCharterApi(project.id, user.id);
+      // 1. Persist charter acceptance to Supabase
+      if (isSupabaseConfigured() && supabase && charter?.id) {
+        const { error: accErr } = await supabase.from('charter_acceptances').upsert({
+          charter_id: charter.id,
+          user_id: user.id,
+        }, { onConflict: 'charter_id,user_id' });
+        if (accErr) {
+          console.warn('Supabase charter acceptance notice:', accErr.message);
+        }
+      }
+
+      // 2. Call FastAPI to record signature on SHA-256 Ledger
+      try {
+        await acceptCharterApi(project.id, user.id);
+      } catch (apiErr) {
+        console.warn('FastAPI ledger charter acceptance notice:', apiErr);
+      }
+
       await loadData();
     } catch (err: any) {
       alert(err.message || 'Failed to sign charter');
@@ -224,7 +402,7 @@ export function ProjectPage() {
                 size="lg"
                 className="w-full justify-center"
                 icon={<Briefcase size={16} />}
-                onClick={() => navigate(`/workspace/${project.id}`)}
+                onClick={() => navigate(`/projects/${project.id}/workspace`)}
               >
                 Open Workspace
               </Button>

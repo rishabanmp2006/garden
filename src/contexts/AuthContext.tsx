@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { authRegister, authLogin, authProfile, syncUserProfile } from '../lib/api';
+import { getSafeDisplayName, getSafeAvatarUrl } from '../lib/profileHelpers';
 import type { User, Profile, UserRole } from '../types';
 
 interface AuthState {
@@ -43,8 +44,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Fetch profile for an authenticated user ID from Supabase
-  const fetchUserProfileSupabase = async (userId: string) => {
+  // Fetch profile row from Supabase public.profiles
+  const fetchUserProfileSupabase = async (userId: string): Promise<Profile | null> => {
     if (!supabase) return null;
     try {
       const { data, error } = await supabase
@@ -73,11 +74,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const profileData = await fetchUserProfileSupabase(session.user.id);
             const creditsSum = await fetchCreditsSupabase(session.user.id);
 
+            const safeDisplayName = getSafeDisplayName(
+              session.user,
+              profileData,
+              null,
+              session.user.user_metadata?.display_name
+            );
+            const safeAvatar = getSafeAvatarUrl(session.user, profileData);
+
             const appUser: User = {
               id: session.user.id,
               email: session.user.email || '',
               role: profileData?.role || (session.user.user_metadata?.role as UserRole) || 'student',
-              display_name: profileData?.display_name || session.user.user_metadata?.display_name || session.user.email?.split('@')[0] || 'User',
+              display_name: safeDisplayName,
+              avatar_url: safeAvatar || undefined,
               verified: profileData?.verified || false,
               created_at: session.user.created_at,
             };
@@ -124,11 +134,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const profileData = await fetchUserProfileSupabase(session.user.id);
           const creditsSum = await fetchCreditsSupabase(session.user.id);
 
+          const safeDisplayName = getSafeDisplayName(
+            session.user,
+            profileData,
+            null,
+            session.user.user_metadata?.display_name
+          );
+          const safeAvatar = getSafeAvatarUrl(session.user, profileData);
+
           const appUser: User = {
             id: session.user.id,
             email: session.user.email || '',
             role: profileData?.role || (session.user.user_metadata?.role as UserRole) || 'student',
-            display_name: profileData?.display_name || session.user.user_metadata?.display_name || session.user.email?.split('@')[0] || 'User',
+            display_name: safeDisplayName,
+            avatar_url: safeAvatar || undefined,
             verified: profileData?.verified || false,
             created_at: session.user.created_at,
           };
@@ -159,11 +178,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const profileData = await fetchUserProfileSupabase(data.user.id);
         const creditsSum = await fetchCreditsSupabase(data.user.id);
 
+        const safeDisplayName = getSafeDisplayName(
+          data.user,
+          profileData,
+          null,
+          data.user.user_metadata?.display_name
+        );
+        const safeAvatar = getSafeAvatarUrl(data.user, profileData);
+
         const appUser: User = {
           id: data.user.id,
           email: data.user.email || '',
           role: profileData?.role || (data.user.user_metadata?.role as UserRole) || 'student',
-          display_name: profileData?.display_name || data.user.user_metadata?.display_name || data.user.email?.split('@')[0] || 'User',
+          display_name: safeDisplayName,
+          avatar_url: safeAvatar || undefined,
           verified: profileData?.verified || false,
           created_at: data.user.created_at,
         };
@@ -205,6 +233,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (error) throw error;
 
       if (data.user) {
+        const safeName = displayName?.trim() || getSafeDisplayName(data.user, null, null, null);
+
         // Create or ensure profile row in public.profiles
         const { data: insertedProfile, error: profileErr } = await supabase
           .from('profiles')
@@ -212,7 +242,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             id: data.user.id,
             email: data.user.email,
             role,
-            display_name: displayName,
+            display_name: safeName,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
@@ -227,7 +257,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           id: data.user.id,
           email: data.user.email || '',
           role,
-          display_name: displayName,
+          display_name: safeName,
           verified: false,
           created_at: data.user.created_at,
         };
@@ -240,7 +270,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         syncUserProfile(data.user.id, {
           email: data.user.email,
           role,
-          display_name: displayName,
+          display_name: safeName,
         }).catch(() => {});
       }
     } else {
@@ -280,6 +310,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           role: profileData.role || prev.role,
           display_name: profileData.display_name || prev.display_name,
+          avatar_url: profileData.avatar_url || prev.avatar_url,
           verified: profileData.verified !== undefined ? Boolean(profileData.verified) : prev.verified,
         } : null);
       }
@@ -301,31 +332,111 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateProfile = useCallback(async (updates: Partial<Profile>) => {
     if (!user) return;
     if (isSupabaseConfigured() && supabase) {
-      // Use upsert to guarantee persistence whether the row exists or is being initialized
-      const { data, error } = await supabase
-        .from('profiles')
-        .upsert({
-          id: user.id,
-          email: user.email,
-          ...updates,
-          updated_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+      // 1. Fetch raw auth user from Supabase client (contains metadata like Google full_name)
+      const { data: authData } = await supabase.auth.getUser();
+      const authUser = authData?.user;
 
-      if (error) {
-        console.error('Supabase profile persistence error:', error);
-        throw error;
+      // 2. Fetch existing profile from DB if not already present in state
+      let existing = profile;
+      if (!existing) {
+        existing = await fetchUserProfileSupabase(user.id);
       }
 
-      if (data) {
-        setProfile(data as Profile);
-        setUser(prev => prev ? {
-          ...prev,
-          display_name: data.display_name || prev.display_name,
-          role: (data.role as UserRole) || prev.role,
-          verified: data.verified !== undefined ? data.verified : prev.verified,
-        } : null);
+      // 3. Clean updates: only include keys with defined, non-null values
+      const cleanUpdates: Record<string, any> = {};
+      for (const [key, value] of Object.entries(updates)) {
+        if (value !== undefined && value !== null) {
+          // If display_name is passed as empty or whitespace, do not overwrite existing
+          if (key === 'display_name' && typeof value === 'string' && !value.trim()) {
+            continue;
+          }
+          cleanUpdates[key] = value;
+        }
+      }
+
+      // 4. Derive safe display_name and avatar_url
+      const safeDisplayName = getSafeDisplayName(
+        authUser,
+        existing,
+        user,
+        cleanUpdates.display_name
+      );
+      const safeAvatar = getSafeAvatarUrl(authUser, existing, cleanUpdates.avatar_url);
+
+      if (existing) {
+        // Profile ALREADY exists in database:
+        // Use an UPDATE statement so untouched fields (including existing display_name) are never overwritten or nulled!
+        const updatePayload: Record<string, any> = {
+          ...cleanUpdates,
+          updated_at: new Date().toISOString(),
+        };
+
+        // If display_name was provided in updates and non-empty, use it;
+        // Otherwise, if the existing record somehow had an empty display_name, patch it:
+        if (cleanUpdates.display_name) {
+          updatePayload.display_name = cleanUpdates.display_name.trim();
+        } else if (!existing.display_name || !existing.display_name.trim()) {
+          updatePayload.display_name = safeDisplayName;
+        }
+
+        const { data, error } = await supabase
+          .from('profiles')
+          .update(updatePayload)
+          .eq('id', user.id)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[updateProfile] Supabase profile update error:', error);
+          throw error;
+        }
+
+        if (data) {
+          setProfile(data as Profile);
+          setUser(prev => prev ? {
+            ...prev,
+            display_name: data.display_name || prev.display_name,
+            role: (data.role as UserRole) || prev.role,
+            avatar_url: data.avatar_url || prev.avatar_url,
+            verified: data.verified !== undefined ? data.verified : prev.verified,
+          } : null);
+        }
+      } else {
+        // Profile does NOT exist in database yet (e.g. brand-new Google OAuth user):
+        // Must perform an insert/upsert with all NOT NULL columns (id, email, role, display_name) guaranteed!
+        const insertPayload: Record<string, any> = {
+          id: user.id,
+          email: user.email || authUser?.email || '',
+          role: cleanUpdates.role || user.role || 'student',
+          avatar_url: safeAvatar,
+          ...cleanUpdates,
+          // Guarantee display_name is never null or empty
+          display_name: safeDisplayName,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { data, error } = await supabase
+          .from('profiles')
+          .upsert(insertPayload)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[updateProfile] Supabase profile insert error:', error);
+          throw error;
+        }
+
+        if (data) {
+          setProfile(data as Profile);
+          setUser(prev => prev ? {
+            ...prev,
+            display_name: data.display_name || prev.display_name,
+            role: (data.role as UserRole) || prev.role,
+            avatar_url: data.avatar_url || prev.avatar_url,
+            verified: data.verified !== undefined ? data.verified : prev.verified,
+          } : null);
+        }
       }
     }
 
@@ -342,7 +453,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Guarantee refresh from Supabase to keep state in sync with database
       await refreshProfile();
     }
-  }, [user, refreshProfile]);
+  }, [user, profile, refreshProfile]);
 
   return (
     <AuthContext.Provider

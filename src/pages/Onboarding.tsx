@@ -5,6 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input, Textarea } from '../components/ui/Input';
 import { useAuth } from '../contexts/AuthContext';
+import { getSafeDisplayName } from '../lib/profileHelpers';
 import type { UserRole } from '../types';
 
 type OnboardingStep = 'role' | 'profile';
@@ -13,16 +14,15 @@ export function Onboarding() {
   const { user, profile, updateProfile, refreshProfile } = useAuth();
   const navigate = useNavigate();
 
-  // Determine if user already completed role selection (has meaningful profile data)
-  const hasCompletedProfile = profile && (profile.education || profile.org_name || profile.experience);
-
   // Step state — always start with explicit role selection on onboarding
   const [step, setStep] = useState<OnboardingStep>('role');
   const [selectedRole, setSelectedRole] = useState<UserRole>(profile?.role as UserRole || user?.role || 'student');
   const [roleLoading, setRoleLoading] = useState(false);
 
   // Common / Student state
-  const [displayName, setDisplayName] = useState(user?.display_name || profile?.display_name || '');
+  const [displayName, setDisplayName] = useState(
+    profile?.display_name || (user?.display_name && user.display_name !== 'User' ? user.display_name : '')
+  );
   const [institution, setInstitution] = useState(profile?.education || '');
   const [skills, setSkills] = useState<string[]>(profile?.skills || []);
   const [newSkill, setNewSkill] = useState('');
@@ -34,7 +34,7 @@ export function Onboarding() {
   const [bio, setBio] = useState(profile?.bio || '');
 
   // Org state
-  const [orgName, setOrgName] = useState(profile?.org_name || user?.display_name || '');
+  const [orgName, setOrgName] = useState(profile?.org_name || (user?.display_name && user.display_name !== 'User' ? user.display_name : ''));
   const [orgDescription, setOrgDescription] = useState(profile?.org_description || '');
   const [contactEmail, setContactEmail] = useState(profile?.contact_email || user?.email || '');
 
@@ -43,6 +43,18 @@ export function Onboarding() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Keep state synchronized if user or profile resolves after mount
+  React.useEffect(() => {
+    if (!displayName) {
+      const derived = profile?.display_name || (user?.display_name && user.display_name !== 'User' ? user.display_name : '');
+      if (derived) setDisplayName(derived);
+    }
+    if (!orgName) {
+      const derivedOrg = profile?.org_name || (user?.display_name && user.display_name !== 'User' ? user.display_name : '');
+      if (derivedOrg) setOrgName(derivedOrg);
+    }
+  }, [user, profile, displayName, orgName]);
 
   const handleAddSkill = (e: React.KeyboardEvent | React.MouseEvent) => {
     if ('key' in e && e.key !== 'Enter') return;
@@ -62,12 +74,18 @@ export function Onboarding() {
     }
   };
 
-  // Persist role to database, then advance to profile step
+  // Persist role to database, preserving display_name, then advance to profile step
   const handleRoleConfirm = async () => {
     setRoleLoading(true);
     setError('');
     try {
-      await updateProfile({ role: selectedRole } as any);
+      const candidate = displayName?.trim() || user?.display_name || profile?.display_name;
+      const safeName = getSafeDisplayName(null, profile, user, candidate);
+
+      await updateProfile({
+        role: selectedRole,
+        display_name: profile?.display_name || safeName,
+      });
       await refreshProfile();
       setStep('profile');
     } catch (err: any) {
@@ -83,40 +101,45 @@ export function Onboarding() {
     setError('');
 
     try {
+      const safeCandidate = displayName.trim() || user?.display_name || profile?.display_name;
+      const safeName = getSafeDisplayName(null, profile, user, safeCandidate);
+      const safeOrgCandidate = orgName.trim() || profile?.org_name || user?.display_name;
+      const safeOrg = getSafeDisplayName(null, profile, user, safeOrgCandidate);
+
       if (selectedRole === 'student') {
         await updateProfile({
           role: selectedRole,
-          display_name: displayName,
-          education: institution,
+          display_name: safeName,
+          education: institution.trim(),
           skills,
           domains,
-          experience,
-          availability,
-          portfolio_links: portfolioLink ? [portfolioLink] : [],
-          bio,
-        } as any);
+          experience: experience.trim(),
+          availability: availability.trim(),
+          portfolio_links: portfolioLink.trim() ? [portfolioLink.trim()] : [],
+          bio: bio.trim(),
+        });
       } else if (selectedRole === 'organization') {
         await updateProfile({
           role: selectedRole,
-          display_name: orgName,
-          org_name: orgName,
-          org_description: orgDescription,
+          display_name: safeOrg,
+          org_name: safeOrg,
+          org_description: orgDescription.trim(),
           domains,
-          contact_email: contactEmail,
-          bio: orgDescription,
-        } as any);
+          contact_email: contactEmail.trim(),
+          bio: orgDescription.trim(),
+        });
       } else {
         // Mentor
         await updateProfile({
           role: selectedRole,
-          display_name: displayName,
-          education: institution,
+          display_name: safeName,
+          education: institution.trim(),
           skills,
           domains,
-          experience: expertise,
-          availability,
-          bio,
-        } as any);
+          experience: expertise.trim(),
+          availability: availability.trim(),
+          bio: bio.trim(),
+        });
       }
 
       await refreshProfile();

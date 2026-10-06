@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, Shield, Clock, Users,
-  Building2, CheckCircle2, ChevronRight, Lock, Loader2
+  Building2, CheckCircle2, ChevronRight, Lock, Loader2, AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/ui/Card';
@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { SensitivityBadge, EngagementBadge } from '../../components/ui/Badge';
 import { fetchProjects } from '../../lib/api';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 export function ExploreProjects() {
   const { user } = useAuth();
@@ -17,26 +18,53 @@ export function ExploreProjects() {
 
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDomain, setSelectedDomain] = useState<string>('all');
   const [selectedModel, setSelectedModel] = useState<string>('all');
   const [selectedSensitivity, setSelectedSensitivity] = useState<string>('all');
 
-  useEffect(() => {
-    async function loadProjects() {
-      setLoading(true);
+  const loadProjects = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (isSupabaseConfigured() && supabase) {
+        const { data, error: sbError } = await supabase
+          .from('projects')
+          .select('*, profiles:org_id(id, display_name, org_name, verified), project_members(count)')
+          .order('created_at', { ascending: false });
+
+        if (sbError) throw sbError;
+
+        const formatted = (data || []).map((p: any) => ({
+          ...p,
+          org_name: p.profiles?.org_name || p.profiles?.display_name || 'Research Organization',
+          org_verified: Boolean(p.profiles?.verified),
+          member_count: p.project_members?.[0]?.count ?? (p.org_id === user?.id ? 1 : 0),
+        }));
+        setProjects(formatted);
+      } else {
+        const data = await fetchProjects();
+        setProjects(Array.isArray(data) ? data : []);
+      }
+    } catch (err: any) {
+      console.warn('Supabase projects fetch note, falling back to local service:', err);
       try {
         const data = await fetchProjects();
         setProjects(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error('Failed to load projects from database:', err);
+      } catch (apiErr: any) {
+        console.error('Failed to load projects from all sources:', apiErr);
+        setError(err.message || apiErr.message || 'Failed to load projects');
         setProjects([]);
-      } finally {
-        setLoading(false);
       }
+    } finally {
+      setLoading(false);
     }
+  }, [user?.id]);
+
+  useEffect(() => {
     loadProjects();
-  }, []);
+  }, [loadProjects]);
 
   const domains = useMemo(() => {
     const list = Array.from(new Set(projects.map((p) => p.domain).filter(Boolean)));
@@ -149,6 +177,20 @@ export function ExploreProjects() {
             <Loader2 size={32} className="mx-auto text-[#1D4ED8] animate-spin mb-3" />
             <h3 className="text-sm font-semibold text-[#0F172A]">Loading research projects...</h3>
             <p className="text-xs text-[#64748B] mt-1">Querying persistent research workspace database.</p>
+          </div>
+        ) : error ? (
+          <div className="text-center py-12 bg-white rounded-lg border border-[#FECACA] p-8">
+            <AlertCircle size={32} className="mx-auto text-[#DC2626] mb-2" />
+            <h3 className="text-sm font-semibold text-[#0F172A]">Failed to load research projects</h3>
+            <p className="text-xs text-[#64748B] mt-1 max-w-md mx-auto">{error}</p>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-4"
+              onClick={() => loadProjects()}
+            >
+              Retry
+            </Button>
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-lg border border-[#E2E8F0] p-8">

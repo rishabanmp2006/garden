@@ -130,6 +130,28 @@ export async function restoreLedger() {
   }
 }
 
+export async function recordLedgerEntryApi(payload: {
+  project_id: string;
+  actor_id: string;
+  action: string;
+  content_payload: string;
+  metadata?: Record<string, any>;
+}) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/ledger/record`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('Failed to record ledger entry');
+    return await res.json();
+  } catch (err) {
+    console.warn('[Ledger] Failed to append entry to backend ledger:', err);
+    return null;
+  }
+}
+
+
 export async function generateWatermark(payload: {
   file_name: string;
   user_id: string;
